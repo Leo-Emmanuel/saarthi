@@ -1,0 +1,29 @@
+# ── Python / Flask backend ──────────────────────────────────────────────────
+backend/venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/*.pyc
+backend/**/*.pyc
+backend/.env
+backend/static/uploads/
+
+# ── Node / React / Vite frontend ────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+frontend/lint_out.txt
+frontend/lint_output.txt
+
+# ── IDE / OS ─────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+.cursor/
+.DS_Store
+Thumbs.db
+*.log
+
+# ── Tooling ───────────────────────────────────────────────────────────────────
+.kluster/
+.agent/

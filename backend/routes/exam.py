@@ -1,0 +1,708 @@
+"""
+Exam API endpoints — CRUD, file upload, submission, and auto-grading.
+
+Registered at /api/exam in app.py.
+
+Architecture: route handlers are thin — service helpers handle DB access,
+grading logic, and PDF generation so they can be tested independently.
+"""
+
+import logging
+import os
+import threading
+from bson import ObjectId
+from datetime import datetime
+from flask import Blueprint, jsonify, request, current_app
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from werkzeug.utils import secure_filename
+from config.db import db
+from models.exam import Exam, Question
+from services.upload import UploadService
+from utils.validation import validate_request
+from schemas.exam_schemas import ExamCreateSchema, SubmitAnswerSchema
+from migrations.migrate_submissions import normalize_answers, answers_to_lookup
+
+exam_bp = Blueprint("exam", __name__)
+
+_exams = db.exams
+_submissions = db.submissions
+_users = db.users
+_log = logging.getLogger(__name__)
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _safe_object_id(raw):
+    """Convert a string to ObjectId, returning None on malformed input."""
+    try:
+        return ObjectId(raw)
+    except Exception:
+        return None
+
+
+def _require_admin_or_creator(exam_doc=None):
+    """Validate the JWT identity is an admin or the exam creator.
+
+    Returns (user_doc, None) on success, or (None, (response, status)) on failure.
+    """
+    raw_id = get_jwt_identity()
+    oid = _safe_object_id(raw_id)
+    if oid is None:
+        return None, (jsonify({"error": "Invalid session"}), 401)
+
+    user = _users.find_one({"_id": oid})
+    if not user:
+        return None, (jsonify({"error": "User not found"}), 401)
+
+    if user.get("role") == "admin":
+        return user, None
+
+    # If an exam doc is provided, check ownership
+    if exam_doc and exam_doc.get("created_by") != oid:
+        return None, (jsonify({"error": "Not authorized to modify this exam"}), 403)
+
+    return user, None
+
+
+def _safe_file_path(file_url):
+    """Convert a file_url to a safe absolute path, preventing path traversal.
+
+    Returns the absolute path or None if the URL is invalid/suspicious.
+    """
+    if not file_url:
+        return None
+
+    # Strip leading slash and sanitize each path component
+    parts = file_url.lstrip("/").split("/")
+    sanitized = [secure_filename(p) for p in parts if p]
+    if not sanitized:
+        return None
+
+    path = os.path.join(current_app.root_path, *sanitized)
+
+    # Ensure the resolved path is still under the app root
+    real_path = os.path.realpath(path)
+    app_root = os.path.realpath(current_app.root_path)
+    if not real_path.startswith(app_root):
+        _log.warning("Path traversal attempt blocked: %s", file_url)
+        return None
+
+    return real_path if os.path.exists(real_path) else None
+
+
+def _is_mcq_like(q) -> bool:
+    """Return True if a question behaves like an MCQ.
+
+    Legacy exams sometimes stored MCQs with type='text' but a non-empty
+    options array. This helper treats any question with options as MCQ,
+    regardless of its ``type`` field.
+    """
+    if hasattr(q, "type"):
+        q_type = getattr(q, "type", None)
+        options = getattr(q, "options", None)
+    elif isinstance(q, dict):
+        q_type = q.get("type")
+        options = q.get("options")
+    else:
+        q_type = None
+        options = None
+
+    if options and len(options) > 0:
+        return True
+    return q_type == "mcq"
+
+
+def _is_writing_like(q) -> bool:
+    """Return True if a question expects a written / voice answer."""
+    if hasattr(q, "type"):
+        q_type = getattr(q, "type", None)
+    elif isinstance(q, dict):
+        q_type = q.get("type")
+    else:
+        q_type = None
+    return q_type in ("text", "voice")
+
+
+def _detect_exam_type(questions):
+    """Auto-detect exam type based on question content."""
+    if not questions:
+        return "empty"
+
+    has_mcq = any(_is_mcq_like(q) for q in questions)
+    has_writing = any(_is_writing_like(q) for q in questions)
+
+    print(f"DEBUG: _detect_exam_type has_mcq={has_mcq}, has_writing={has_writing}")
+
+    if has_mcq and not has_writing:
+        return "mcq-only"
+    if not has_mcq and has_writing:
+        return "writing-only"
+    if has_mcq and has_writing:
+        return "mixed"
+    return "unknown"
+
+
+def _parse_questions_from_data(raw_questions):
+    """Build Question objects from request data."""
+    questions = []
+    for q in (raw_questions or []):
+        questions.append(Question(
+            text=q.get("text", ""),
+            q_type=q.get("type", "text"),
+            options=q.get("options", []),
+            correct_answer=q.get("correct_answer"),
+            marks=q.get("marks", 1),
+            grading_config=q.get("grading_config"),
+        ))
+    return questions
+
+
+def _parse_questions_from_file(file_url):
+    """Attempt to extract questions from an uploaded DOCX or PDF.
+
+    Returns a list of Question objects, or [] on failure.
+    """
+    path = _safe_file_path(file_url)
+    if not path:
+        return []
+
+    try:
+        if file_url.endswith((".docx", ".doc")):
+            from services.question_parser import parse_docx
+            return parse_docx(path)
+        elif file_url.endswith(".pdf"):
+            from services.pdf_parser import parse_pdf
+            return parse_pdf(path)
+    except Exception:
+        _log.exception("Failed to parse questions from %s", file_url)
+
+    return []
+
+
+# ── Exam-type & answer helpers ───────────────────────────────────────────────
+
+def _compute_exam_type(questions: list) -> str:
+    """Derive the exam type from its questions — never stored in the database.
+
+    Returns: 'mcq-only' | 'writing-only' | 'mixed' | 'empty' | 'unknown'
+    """
+    if not questions:
+        return "empty"
+
+    print(f"DEBUG: Computing exam type for {len(questions)} questions")
+    for i, q in enumerate(questions):
+        if isinstance(q, dict):
+            print(f"DEBUG: Question {i}: type={q.get('type')}, options_len={len(q.get('options') or [])}")
+        else:
+            print(f"DEBUG: Question {i}: obj_type={getattr(q, 'type', None)}, has_options={bool(getattr(q, 'options', None))}")
+
+    has_mcq = any(_is_mcq_like(q) for q in questions)
+    has_writing = any(_is_writing_like(q) for q in questions)
+
+    print(f"DEBUG: has_mcq={has_mcq}, has_writing={has_writing}")
+
+    if has_mcq and not has_writing:
+        return "mcq-only"
+    if not has_mcq and has_writing:
+        return "writing-only"
+    if has_mcq and has_writing:
+        return "mixed"
+    return "unknown"
+
+
+def _normalize_mcq(s: str) -> str:
+    """Reduce an MCQ answer to a single uppercase letter.
+
+    Handles all common student formats:
+        'a', 'A', '(a)', '(A)', '(A) Some text', 'A. Some text'
+    """
+    if not s:
+        return ""
+    s = s.strip().upper()
+    # Strip leading parenthesis: '(A) ...' → 'A) ...'
+    if s.startswith("("):
+        s = s[1:]
+    # Keep only the first character before any space, dot, or closing paren
+    import re as _re
+    m = _re.match(r'^([A-D])', s)
+    return m.group(1) if m else s[:1]
+
+
+# ── Grading logic ─────────────────────────────────────────────────────────────
+
+def _get_nlp():
+    """Get the shared NLP service singleton."""
+    from services.nlp import get_nlp_service
+    return get_nlp_service()
+
+
+# Fix 4: Default grading config (used when question has no per-question config)
+_DEFAULT_GRADING_CONFIG = {
+    "method": "nlp",
+    "threshold_full": 0.7,
+    "threshold_partial": 0.4,
+}
+
+
+def _grade_answers(questions, answers_raw):
+    """Score student answers against correct answers.
+
+    MCQ questions use exact/loose match.
+    Text/voice answers use NLP similarity scoring with partial credit.
+
+    Fix 4: reads per-question grading_config instead of hardcoded thresholds.
+    Fix 5: accepts both old dict format and new array format via answers_to_lookup.
+
+    Returns (score, total_marks).
+    """
+    # Normalize answers to a lookup dict for grading
+    answers = answers_to_lookup(answers_raw)
+
+    score = 0
+    total_marks = 0
+    nlp = _get_nlp()
+
+    for q in questions:
+        q_id = str(q.get("_id", ""))
+        marks = q.get("marks", 1)
+        q_type = q.get("type", "text")
+        total_marks += marks
+
+        correct = str(q.get("correct_answer", "")).strip()
+        student = str(answers.get(q_id, "")).strip()
+
+        if not correct or not student:
+            continue
+
+        # Read per-question grading config (Fix 4)
+        config = q.get("grading_config") or _DEFAULT_GRADING_CONFIG
+        method = config.get("method", "nlp")
+
+        # ── Manual grading: skip auto-scoring ─────────────────────────────
+        if method == "manual":
+            continue
+
+        # ── MCQ: normalised single-letter comparison ──────────────────────
+        if q_type == "mcq":
+            if _normalize_mcq(student) == _normalize_mcq(correct):
+                score += marks
+            continue
+
+        # ── Exact match method ────────────────────────────────────────────
+        if method == "exact":
+            if student.lower() == correct.lower():
+                score += marks
+            continue
+
+        # ── NLP: similarity scoring with configurable thresholds ──────────
+        threshold_full = config.get("threshold_full", 0.7)
+        threshold_partial = config.get("threshold_partial", 0.4)
+
+        result = nlp.score_similarity(student, correct)
+        sim = result.get("score", 0)
+
+        if sim >= threshold_full:
+            score += marks
+        elif sim >= threshold_partial:
+            score += marks * 0.5  # partial credit
+
+    return score, total_marks
+
+
+def _generate_submission_pdf(user_doc, exam_doc, exam_id, answers_raw, score, total_marks):
+    """Generate a PDF answer sheet for a final submission.
+
+    Returns the PDF URL or None on failure.
+    """
+    try:
+        from services.pdf_generator import PDFGenerator
+
+        student_name = user_doc.get("name", "Student") if user_doc else "Student"
+        exam_title = exam_doc.get("title", "Exam") if exam_doc else "Exam"
+
+        # Convert answers to lookup dict for PDF generation
+        answers = answers_to_lookup(answers_raw)
+
+        pdf_data = {
+            "student_name": student_name,
+            "exam_title": exam_title,
+            "date": datetime.utcnow().strftime("%Y-%m-%d"),
+            "answers": answers,
+            "score": f"{score} / {total_marks}",
+        }
+
+        filename = secure_filename(f"{student_name}_{exam_title}_{exam_id}.pdf")
+        return PDFGenerator.generate_answer_sheet(pdf_data, filename)
+    except Exception:
+        _log.exception("PDF generation failed for exam %s", exam_id)
+        return None
+
+
+# ── Fix 7: Async grading in background thread ────────────────────────────────
+
+def _grade_in_background(app, exam_oid, user_oid, answers_raw):
+    """Run grading + PDF generation in a background thread.
+
+    Uses app.app_context() since Flask context is not available in threads.
+    """
+    with app.app_context():
+        try:
+            exam_doc = _exams.find_one({"_id": exam_oid})
+            user_doc = _users.find_one({"_id": user_oid})
+
+            score, total_marks = 0, 0
+            if exam_doc and exam_doc.get("questions"):
+                score, total_marks = _grade_answers(exam_doc["questions"], answers_raw)
+
+            # Generate PDF (non-critical)
+            pdf_url = None
+            if exam_doc and user_doc:
+                pdf_url = _generate_submission_pdf(
+                    user_doc, exam_doc, str(exam_oid), answers_raw, score, total_marks,
+                )
+
+            _submissions.update_one(
+                {"exam_id": exam_oid, "user_id": user_oid},
+                {"$set": {
+                    "status": "graded",
+                    "submitted_at": datetime.utcnow(),
+                    "score": score,
+                    "total_marks": total_marks,
+                    **({} if pdf_url is None else {"pdf_url": pdf_url}),
+                }},
+            )
+            _log.info("Background grading complete for exam %s, user %s: %s/%s",
+                       exam_oid, user_oid, score, total_marks)
+        except Exception:
+            _log.exception("Background grading failed for exam %s", exam_oid)
+            # Mark as graded with error so the frontend doesn't poll forever
+            _submissions.update_one(
+                {"exam_id": exam_oid, "user_id": user_oid},
+                {"$set": {"status": "graded", "score": 0, "total_marks": 0}},
+            )
+
+
+# ── Route handlers ────────────────────────────────────────────────────────────
+
+@exam_bp.route("/upload", methods=["POST"])
+@jwt_required()
+def upload_file():
+    """Upload a question paper (PDF/DOCX)."""
+    if "file" not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    file = request.files["file"]
+    if file.filename == "":
+        return jsonify({"error": "No selected file"}), 400
+
+    try:
+        file_url = UploadService.save_file(file, folder="question_papers")
+        return jsonify({"file_url": file_url})
+    except Exception:
+        _log.exception("File upload failed")
+        return jsonify({"error": "File upload failed"}), 500
+
+
+@exam_bp.route("/create", methods=["POST"])
+@jwt_required()
+@validate_request(ExamCreateSchema)
+def create_exam():
+    """Create a new exam. Optionally auto-parse questions from uploaded file."""
+    data = request.validated_data
+
+    try:
+        current_user_id = get_jwt_identity()
+        _log.info(f"Creating exam for user: {current_user_id}")
+        _log.info(f"Request data: {data}")
+
+        # Build questions from request data or parse from file
+        questions_list = _parse_questions_from_data(data.get("questions"))
+        file_url = data.get("file_url") or data.get("file_path")
+        _log.info(f"File URL: {file_url}")
+        _log.info(f"Questions from data: {len(questions_list)}")
+        
+        if not questions_list and file_url:
+            questions_list = _parse_questions_from_file(file_url)
+            _log.info(f"Questions from file: {len(questions_list)}")
+
+        # Auto-detect exam type based on questions
+        exam_type = _detect_exam_type(questions_list)
+        _log.info(f"Detected exam type: {exam_type}")
+        
+        exam = Exam(
+            title=data.get("title", "Untitled Exam"),
+            description=data.get("description", ""),
+            created_by=current_user_id,
+            duration=data.get("duration", 60),
+            questions=questions_list,
+            file_url=file_url,
+            examType=exam_type,
+        )
+
+        result = _exams.insert_one(exam.to_dict())
+        _log.info(f"Exam created successfully: {result.inserted_id}")
+        return jsonify({"message": "Exam created", "exam_id": str(result.inserted_id)}), 201
+    except Exception as e:
+        _log.exception(f"Exam creation failed: {str(e)}")
+        _log.error(f"Error details: {type(e).__name__}: {str(e)}")
+        return jsonify({"error": f"Exam creation failed: {str(e)}"}), 500
+
+
+@exam_bp.route("/", methods=["GET"])
+@jwt_required()
+def list_exams():
+    """List all exams (requires authentication)."""
+    try:
+        exams = list(_exams.find(
+            {},
+            {
+                "title": 1,
+                "description": 1,
+                "duration": 1,
+                "created_at": 1,
+                "file_url": 1,
+                "examType": 1,
+                "questions.type": 1,
+                "questions.options": 1,
+            },
+        ))
+        for ex in exams:
+            ex["_id"] = str(ex["_id"])
+            if "created_by" in ex:
+                ex["created_by"] = str(ex["created_by"])
+            # Prefer stored examType when present (set at creation time)
+            stored_type = ex.get("examType")
+            if stored_type in {"mcq-only", "writing-only", "mixed", "empty"}:
+                ex["exam_type"] = stored_type
+            else:
+                # Fallback: derive from questions using the same helpers as get_exam
+                ex["exam_type"] = _compute_exam_type(ex.get("questions", []))
+            ex.pop("questions", None)  # strip questions list — only type summary needed
+        return jsonify(exams)
+    except Exception:
+        _log.exception("Failed to list exams")
+        return jsonify({"error": "Failed to list exams"}), 500
+
+
+
+
+# ── MCQ enrichment helper ─────────────────────────────────────────────────────
+
+import re as _re
+
+# Matches embedded options like "• (A) H₂O • (B) CO₂" or "(A) Alpha (B) Beta"
+_OPTION_RE = _re.compile(
+    r'[•\-\s]*\(([A-D])\)\s*([^•\(\n]+?)(?=\s*[•\-]*\s*\([A-D]\)|$)',
+    _re.IGNORECASE | _re.DOTALL,
+)
+
+
+def _enrich_question_for_client(q: dict) -> dict:
+    """Normalise question fields that the frontend needs to render correctly.
+
+    Legacy / PDF-parsed questions are stored with type='text' even when they
+    are actually MCQ questions (they have a correct_answer like 'A', 'B', etc.)
+    This function:
+      1. Detects MCQ questions by presence of correct_answer OR embedded options
+      2. Sets type='mcq'
+      3. Parses the A/B/C/D options from the question text and exposes them
+         as an 'options' list so MCQOptionCard renders properly
+
+    NOTE: correct_answer is NOT returned here — it is stripped by the caller.
+    """
+    q = dict(q)  # shallow copy — don't mutate the DB document
+
+    has_correct = bool(q.get("correct_answer", ""))
+    existing_options = q.get("options") or []
+    text = q.get("text", "")
+
+    # Parse options from embedded text like "… • (A) H₂O • (B) CO₂ …"
+    parsed_options = []
+    if text:
+        matches = _OPTION_RE.findall(text)
+        if matches:
+            # Build ordered list [optA, optB, optC, optD]
+            option_map = {letter.upper(): val.strip() for letter, val in matches}
+            for letter in ["A", "B", "C", "D"]:
+                if letter in option_map:
+                    parsed_options.append(option_map[letter])
+
+    # Determine if this is an MCQ question
+    is_mcq = (
+        has_correct
+        or len(existing_options) > 0
+        or len(parsed_options) > 0
+    )
+
+    if is_mcq:
+        q["type"] = "mcq"
+        # Prefer already-stored options; fall back to parsed
+        if not existing_options and parsed_options:
+            q["options"] = parsed_options
+
+    return q
+
+
+@exam_bp.route("/<exam_id>", methods=["GET"])
+@jwt_required()
+def get_exam(exam_id):
+    """Fetch a single exam by ID.
+
+    Security: correct_answer is STRIPPED before sending to the student so that
+    the answer key is never exposed to the client.
+    """
+    oid = _safe_object_id(exam_id)
+    if oid is None:
+        return jsonify({"error": "Invalid exam ID"}), 400
+
+    exam = _exams.find_one({"_id": oid})
+    if not exam:
+        return jsonify({"error": "Exam not found"}), 404
+
+    exam["_id"] = str(exam["_id"])
+    exam["created_by"] = str(exam.get("created_by", ""))
+
+    questions = exam.get("questions", [])
+    enriched = []
+    for q in questions:
+        if "_id" in q:
+            q["_id"] = str(q["_id"])
+        # Enrich first (parses MCQ type/options), THEN strip answer key
+        q = _enrich_question_for_client(q)
+        q.pop("correct_answer", None)
+        q.pop("grading_config", None)
+        enriched.append(q)
+
+    exam["questions"] = enriched
+
+    # Add computed exam_type so the frontend never needs to re-derive it
+    exam["exam_type"] = _compute_exam_type(enriched)
+
+    return jsonify(exam)
+
+
+
+
+@exam_bp.route("/<exam_id>/submit", methods=["POST"])
+@jwt_required()
+@validate_request(SubmitAnswerSchema)
+def submit_exam(exam_id):
+    """Save progress or finalize a submission.
+
+    Fix 5: writes answers in structured array format.
+    Fix 7: when final=true, returns 202 and grades asynchronously.
+    """
+    data = request.validated_data
+
+    exam_oid = _safe_object_id(exam_id)
+    user_oid = _safe_object_id(get_jwt_identity())
+    if not exam_oid or not user_oid:
+        return jsonify({"error": "Invalid exam or user ID"}), 400
+
+    is_final = data.get("final", False)
+    answers_raw = data.get("answers", {})
+    audio_files = data.get("audio_files", {})
+    tab_violations = data.get("tab_violations", [])
+
+    # Fix 5: normalize answers to structured array format
+    answers = normalize_answers(answers_raw, audio_files)
+
+    try:
+        # Upsert submission
+        existing = _submissions.find_one({"exam_id": exam_oid, "user_id": user_oid})
+
+        submission_data = {
+            "exam_id": exam_oid,
+            "user_id": user_oid,
+            "answers": answers,
+            "audio_files": audio_files,
+            "tab_violations": tab_violations,
+            "flagged": len(tab_violations) >= 3,  # Auto-flag if 3+ violations
+            "last_updated": datetime.utcnow(),
+            "status": "submitted" if is_final else "in_progress",
+        }
+
+        if existing:
+            _submissions.update_one({"_id": existing["_id"]}, {"$set": submission_data})
+        else:
+            _submissions.insert_one(submission_data)
+
+        # ── For partial saves, return immediately (no scores) ─────────────
+        if not is_final:
+            return jsonify({"message": "Progress saved"}), 201
+
+        # ── Fix 7: Final submission → async grading ───────────────────────
+        # Mark as "grading" and return 202 immediately
+        _submissions.update_one(
+            {"exam_id": exam_oid, "user_id": user_oid},
+            {"$set": {"status": "grading"}},
+        )
+
+        # Launch grading in background thread
+        app = current_app._get_current_object()
+        thread = threading.Thread(
+            target=_grade_in_background,
+            args=(app, exam_oid, user_oid, answers),
+            daemon=True,
+        )
+        thread.start()
+
+        return jsonify({"message": "Exam submitted — grading in progress", "status": "grading"}), 202
+
+    except Exception:
+        _log.exception("Submission failed for exam %s", exam_id)
+        return jsonify({"error": "Submission failed"}), 500
+
+
+@exam_bp.route("/<exam_id>/submission/status", methods=["GET"])
+@jwt_required()
+def get_submission_status(exam_id):
+    """Fix 7: poll endpoint for async grading status.
+
+    Returns { status, score, total_marks }.
+    """
+    exam_oid = _safe_object_id(exam_id)
+    user_oid = _safe_object_id(get_jwt_identity())
+    if not exam_oid or not user_oid:
+        return jsonify({"error": "Invalid IDs"}), 400
+
+    sub = _submissions.find_one(
+        {"exam_id": exam_oid, "user_id": user_oid},
+        {"status": 1, "score": 1, "total_marks": 1, "tab_violations": 1, "flagged": 1},
+    )
+    if not sub:
+        return jsonify({"error": "Submission not found"}), 404
+
+    return jsonify({
+        "status": sub.get("status", "unknown"),
+        "score": sub.get("score"),
+        "total_marks": sub.get("total_marks"),
+        "tab_violations": sub.get("tab_violations", []),
+        "flagged": sub.get("flagged", False),
+    })
+
+
+@exam_bp.route("/<exam_id>", methods=["DELETE"])
+@jwt_required()
+def delete_exam(exam_id):
+    """Delete an exam. Requires admin role or ownership."""
+    oid = _safe_object_id(exam_id)
+    if oid is None:
+        return jsonify({"error": "Invalid exam ID"}), 400
+
+    exam = _exams.find_one({"_id": oid})
+    if not exam:
+        return jsonify({"error": "Exam not found"}), 404
+
+    # Ownership check — only admin or creator can delete
+    _, auth_err = _require_admin_or_creator(exam)
+    if auth_err:
+        return auth_err
+
+    try:
+        _exams.delete_one({"_id": oid})
+        # Delete associated submissions to prevent orphans
+        _submissions.delete_many({"exam_id": oid})
+        return jsonify({"message": "Exam deleted successfully"})
+    except Exception:
+        _log.exception("Failed to delete exam %s", exam_id)
+        return jsonify({"error": "Failed to delete exam"}), 500
