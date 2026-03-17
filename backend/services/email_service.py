@@ -27,6 +27,12 @@ def send_exam_submission_confirmation(student_email: str, student_name: str, exa
         print("⚠️  SENDGRID_API_KEY not set — email not sent (development mode)")
         return False
     
+    # Debug: Check if API key exists and starts with SG.
+    if not api_key.startswith("SG."):
+        print(f"⚠️  WARNING: API key doesn't start with 'SG.' — it starts with: {api_key[:7]}")
+    else:
+        print(f"✅ API key found (length: {len(api_key)} characters)")
+    
     try:
         message = Mail(
             from_email="leoemmanuel2004@gmail.com",  # Change to your domain
