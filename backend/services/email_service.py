@@ -35,7 +35,7 @@ def send_exam_submission_confirmation(student_email: str, student_name: str, exa
     
     try:
         message = Mail(
-            from_email="leoemmanuel2004@gmail.com",  # Change to your domain
+            from_email="dealhivehub@gmail.com",  # Verified sender email
             to_emails=student_email,
             subject=f"Exam Submission Confirmation: {exam_title}",
             html_content=f"""
