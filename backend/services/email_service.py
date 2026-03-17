@@ -70,7 +70,15 @@ def send_exam_submission_confirmation(student_email: str, student_name: str, exa
         return True
         
     except Exception as e:
-        print(f"❌ Failed to send email to {student_email}: {type(e).__name__}: {str(e)}")
+        error_type = type(e).__name__
+        error_msg = str(e)
+        print(f"❌ Failed to send email to {student_email}: {error_type}: {error_msg}")
+        
+        # Debug: If it's an auth error, try to give more info
+        if "401" in error_msg or "Unauthorized" in error_msg:
+            print(f"   ℹ️  Debug: API key starts with: {api_key[:20] if api_key else 'NONE'}")
+            print(f"   ℹ️  Debug: API key ends with: ...{api_key[-10:] if api_key else 'NONE'}")
+        
         return False
 
 
