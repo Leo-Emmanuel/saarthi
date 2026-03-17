@@ -29,9 +29,7 @@ def send_exam_submission_confirmation(student_email: str, student_name: str, exa
     
     # Debug: Check if API key exists and starts with SG.
     if not api_key.startswith("SG."):
-        print(f"⚠️  WARNING: API key doesn't start with 'SG.' — it starts with: {api_key[:7]}")
-    else:
-        print(f"✅ API key found (length: {len(api_key)} characters)")
+        print(f"⚠️  WARNING: API key format issue")
     
     try:
         message = Mail(
@@ -73,12 +71,6 @@ def send_exam_submission_confirmation(student_email: str, student_name: str, exa
         error_type = type(e).__name__
         error_msg = str(e)
         print(f"❌ Failed to send email to {student_email}: {error_type}: {error_msg}")
-        
-        # Debug: If it's an auth error, try to give more info
-        if "401" in error_msg or "Unauthorized" in error_msg:
-            print(f"   ℹ️  Debug: API key starts with: {api_key[:20] if api_key else 'NONE'}")
-            print(f"   ℹ️  Debug: API key ends with: ...{api_key[-10:] if api_key else 'NONE'}")
-        
         return False
 
 
