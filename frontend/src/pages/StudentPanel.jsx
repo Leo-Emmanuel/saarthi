@@ -15,6 +15,7 @@ export default function StudentPanel() {
     const [stuName, setStuName] = useState('');
     const [stuId, setStuId] = useState('');
     const [stuDept, setStuDept] = useState('');
+    const [stuEmail, setStuEmail] = useState('');
     const [stuPin, setStuPin] = useState('');
     const [fieldErrors, setFieldErrors] = useState({});
     const [message, setMessage] = useState('');
@@ -69,6 +70,7 @@ export default function StudentPanel() {
         setStuName('');
         setStuId('');
         setStuDept('');
+        setStuEmail('');
         setStuPin('');
         setFieldErrors({});
     };
@@ -83,6 +85,7 @@ export default function StudentPanel() {
         const cleanName = stuName.trim();
         const cleanId = stuId.trim();
         const cleanDept = stuDept.trim();
+        const cleanEmail = stuEmail.trim();
         const cleanPin = String(stuPin).trim();
 
         if (!cleanName || cleanName.length < 2) {
@@ -98,6 +101,9 @@ export default function StudentPanel() {
         if (!cleanDept) {
             nextErrors.department = 'Department is required';
         }
+        if (cleanEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+            nextErrors.email = 'Please enter a valid email address';
+        }
         if (!cleanPin) {
             nextErrors.pin = 'PIN is required';
         } else if (!/^\d{4,6}$/.test(cleanPin)) {
@@ -110,7 +116,7 @@ export default function StudentPanel() {
         }
 
         try {
-            const res = await registerStudent(stuName, stuId, stuDept, stuPin);
+            const res = await registerStudent(stuName, stuId, stuDept, stuEmail, stuPin);
             if (res.success) {
                 setMessage('Student registered successfully!');
                 setIsError(false);
@@ -360,6 +366,28 @@ export default function StudentPanel() {
                         {fieldErrors.department && (
                             <p style={{ color: 'red', fontSize: '0.85rem', marginTop: 4 }}>
                                 {fieldErrors.department}
+                            </p>
+                        )}
+                    </div>
+                    <div>
+                        <input
+                            type="email"
+                            placeholder="Email Address (Optional)"
+                            className="input-dark w-full"
+                            value={stuEmail}
+                            onChange={(e) => {
+                                setStuEmail(e.target.value);
+                                if (fieldErrors.email) {
+                                    setFieldErrors(prev => ({ ...prev, email: '' }));
+                                }
+                            }}
+                        />
+                        <p style={{ color: 'var(--muted)', fontSize: '0.75rem', marginTop: 4 }}>
+                            Required for email notifications
+                        </p>
+                        {fieldErrors.email && (
+                            <p style={{ color: 'red', fontSize: '0.85rem', marginTop: 4 }}>
+                                {fieldErrors.email}
                             </p>
                         )}
                     </div>

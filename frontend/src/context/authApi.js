@@ -42,9 +42,9 @@ export const authApi = {
     register: (name, email, password, role) =>
         safe(api.post('/auth/register', { name, email, password, role }), 'Registration failed'),
 
-    registerStudent: (name, studentId, department, pin) =>
+    registerStudent: (name, studentId, department, email, pin) =>
         safe(
-            api.post('/auth/register-student', { name, studentId, department, pin }),
+            api.post('/auth/register-student', { name, studentId, department, email, pin }),
             'Student Registration failed',
         ),
 

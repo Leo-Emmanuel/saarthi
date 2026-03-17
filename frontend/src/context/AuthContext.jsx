@@ -124,9 +124,9 @@ export const AuthProvider = ({ children }) => {
 
     /** @returns {{ success: boolean, error?: string, fields?: object, data?: object }} */
     const registerStudent = useCallback(
-        async (name, studentId, department, pin) => {
+        async (name, studentId, department, email, pin) => {
             const result = await withBusy(busyCount, setBusy, () =>
-                authApi.registerStudent(name, studentId, department, pin),
+                authApi.registerStudent(name, studentId, department, email, pin),
             );
             return result.success
                 ? { success: true, data: result.data }
