@@ -17,6 +17,11 @@ def send_exam_submission_confirmation(student_email: str, student_name: str, exa
         student_name: Student's name
         exam_title: Title of the submitted exam
     """
+    # Validate email before attempting to send
+    if not student_email or not isinstance(student_email, str) or "@" not in student_email:
+        print(f"⚠️  Invalid email address: {student_email} (type: {type(student_email).__name__})")
+        return False
+    
     api_key = os.getenv("SENDGRID_API_KEY")
     if not api_key:
         print("⚠️  SENDGRID_API_KEY not set — email not sent (development mode)")
@@ -59,7 +64,7 @@ def send_exam_submission_confirmation(student_email: str, student_name: str, exa
         return True
         
     except Exception as e:
-        print(f"❌ Failed to send email: {str(e)}")
+        print(f"❌ Failed to send email to {student_email}: {type(e).__name__}: {str(e)}")
         return False
 
 

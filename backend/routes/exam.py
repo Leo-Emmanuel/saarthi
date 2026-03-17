@@ -704,10 +704,18 @@ def submit_exam(exam_id):
             
             # Send email confirmation to student
             if student_doc:
-                student_email = student_doc.get("email") or student_doc.get("studentId")
-                student_name = student_doc.get("name", "Student")
-                exam_title = exam_doc.get("title", "Exam") if exam_doc else "Exam"
-                send_exam_submission_confirmation(student_email, student_name, exam_title)
+                # Extract valid email (prefer 'email' field, fallback to 'studentId' only if it looks like an email)
+                student_email = student_doc.get("email")
+                if not student_email or not isinstance(student_email, str) or "@" not in student_email:
+                    student_email = student_doc.get("studentId")
+                
+                # Only send if we have a valid email
+                if student_email and isinstance(student_email, str) and "@" in str(student_email):
+                    student_name = student_doc.get("name", "Student")
+                    exam_title = exam_doc.get("title", "Exam") if exam_doc else "Exam"
+                    send_exam_submission_confirmation(student_email, student_name, exam_title)
+                else:
+                    print(f"⚠️  Skipping email: No valid email for user {user_oid}")
             
             print("[SOCKET] emitting new_submission")
             socketio.emit('new_submission', {
