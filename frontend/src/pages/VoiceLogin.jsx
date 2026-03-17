@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { Mic, Volume2 } from 'lucide-react';
 import useTTS from '../hooks/useTTS';
+import usePageTitle from '../hooks/usePageTitle';
 
 // ── Module-level text processing ──────────────────────────────────────────────
 // ✅ Extracted from the component: these are pure functions with no dependency
@@ -49,8 +50,31 @@ function processSpokenText(text, { digitsOnly = false, extraMap = {} } = {}) {
 
 // Steps: 0=Idle  1=Listening ID  2=Listening PIN  3=Verifying
 export default function VoiceLogin() {
+    usePageTitle('Student Login');
     const { pinLogin } = useAuth();
     const navigate = useNavigate();
+
+    useEffect(() => {
+        const announce = () => {
+            window.speechSynthesis.cancel();
+            const u = new SpeechSynthesisUtterance(
+                'Welcome to Saarthi. You are on the voice login page. '
+                + 'Please say your student ID to begin.'
+            );
+            window.speechSynthesis.speak(u);
+            document.removeEventListener('click', announce);
+            document.removeEventListener('keydown', announce);
+            document.removeEventListener('touchstart', announce);
+        };
+        document.addEventListener('click', announce);
+        document.addEventListener('keydown', announce);
+        document.addEventListener('touchstart', announce);
+        return () => {
+            document.removeEventListener('click', announce);
+            document.removeEventListener('keydown', announce);
+            document.removeEventListener('touchstart', announce);
+        };
+    }, []);
 
     const [step, setStep] = useState(0);
     const stepRef = useRef(0);
@@ -71,6 +95,18 @@ export default function VoiceLogin() {
 
     // Processing lock so TTS and Mic don't collide, and to handle state correctly
     const processingRef = useRef(false);
+    const listenStartRef = useRef(0);
+    const heardResultRef = useRef(false);
+    const noSpeechHandledRef = useRef(false);
+    const startListeningRef = useRef(() => { });
+
+    // Cancel any lingering TTS on mount/unmount so voice login starts clean.
+    useEffect(() => {
+        window.speechSynthesis?.cancel();
+        return () => {
+            window.speechSynthesis?.cancel();
+        };
+    }, []);
 
     // Sync state with ref
     useEffect(() => { stepRef.current = step; }, [step]);
@@ -91,7 +127,10 @@ export default function VoiceLogin() {
             utterance.onend = () => { clearTimeout(fallback); utteranceRef.current = null; resolve(); };
             utterance.onerror = (e) => {
                 clearTimeout(fallback);
-                console.error('TTS error:', e);
+                // interrupted/canceled is expected when we cancel TTS — don't log it as error
+                if (e.error !== 'interrupted' && e.error !== 'canceled') {
+                    console.error('TTS error:', e);
+                }
                 utteranceRef.current = null;
                 resolve();
             };
@@ -118,14 +157,39 @@ export default function VoiceLogin() {
         []
     );
 
+    const startSTTAfterTTS = useCallback((startFn) => {
+        const runStart = () => {
+            window.speechSynthesis?.cancel();
+            setTimeout(startFn, 300);
+        };
+
+        if (window.speechSynthesis?.speaking) {
+            const poll = setInterval(() => {
+                if (!window.speechSynthesis.speaking) {
+                    clearInterval(poll);
+                    setTimeout(runStart, 500);
+                }
+            }, 200);
+        } else {
+            runStart();
+        }
+    }, []);
+
+    const scheduleRestart = useCallback((delayMs = 500) => {
+        setTimeout(() => {
+            if (!processingRef.current && (stepRef.current === 1 || stepRef.current === 2)) {
+                startListeningRef.current?.();
+            }
+        }, delayMs);
+    }, []);
+
     // ── Recognition session management ────────────────────────────────────────
-    const startListening = useCallback(() => {
+    const startRecognitionCore = useCallback(() => {
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRecognition) {
             setStatus('Voice recognition not supported. Please use the manual login.');
             return;
         }
-
         // Abort existing session before opening a new one
         if (recognitionRef.current) {
             try { recognitionRef.current.abort(); } catch { /* ignore */ }
@@ -137,48 +201,90 @@ export default function VoiceLogin() {
         recognition.lang = 'en-US';
         recognitionRef.current = recognition;
 
+        // Track this listening session so we only say "didn't hear" after enough wait.
+        listenStartRef.current = Date.now();
+        heardResultRef.current = false;
+        noSpeechHandledRef.current = false;
+
+        // Keep the mic open long enough before forcing an end cycle.
+        const maxListenTimer = setTimeout(() => {
+            if (recognitionRef.current === recognition) {
+                try { recognition.stop(); } catch { /* ignore */ }
+            }
+        }, 10000);
+
         recognition.onstart = () => setIsListening(true);
 
         recognition.onresult = (event) => {
+            heardResultRef.current = true;
             const transcript = event.results[0][0].transcript;
             if (handleInputRef.current) handleInputRef.current(transcript);
         };
 
         recognition.onerror = async (event) => {
+            if (event.error === 'aborted') return; // Intentional stop/abort — do not restart.
+
             if (event.error === 'not-allowed') {
+                clearTimeout(maxListenTimer);
                 setStatus('Microphone access denied. Please allow microphone access or use manual login.');
                 setStep(0);
                 stepRef.current = 0;
             } else if (event.error === 'no-speech') {
-                // Silently ignore "no-speech" errors so the background loop can seamlessly reboot it in onend
-                // without harassing the user with "I didn't hear anything" every 10 seconds.
+                // Restart silently for no-speech so we don't spam prompts.
+                clearTimeout(maxListenTimer);
+                noSpeechHandledRef.current = true;
+                scheduleRestart(500);
             } else {
+                clearTimeout(maxListenTimer);
                 if (processingRef.current || stepRef.current === 0) return;
                 console.error('Speech recognition error:', event.error);
                 processingRef.current = true;
-                await speak("I didn't hear anything clearly. Please try again.");
+                await speak('There was a microphone error. Please try again.');
                 processingRef.current = false;
-                setTimeout(startListening, 200);
+                scheduleRestart(200);
             }
         };
 
-        recognition.onend = () => {
+        recognition.onend = async () => {
+            clearTimeout(maxListenTimer);
             if (recognitionRef.current === recognition) {
                 setIsListening(false);
             }
-            // Auto-restart listening if we are still securely in listening mode but the session timed out
-            if (!processingRef.current && (stepRef.current === 1 || stepRef.current === 2) && recognitionRef.current === recognition) {
-                setTimeout(() => {
-                    if (!processingRef.current && (stepRef.current === 1 || stepRef.current === 2)) {
-                        startListening();
-                    }
-                }, 300);
+
+            if (processingRef.current || !(stepRef.current === 1 || stepRef.current === 2)) return;
+
+            // no-speech already handled in onerror; skip duplicate onend handling.
+            if (noSpeechHandledRef.current) {
+                noSpeechHandledRef.current = false;
+                return;
             }
+
+            if (!heardResultRef.current) {
+                const elapsed = Date.now() - listenStartRef.current;
+                if (elapsed < 8000) {
+                    scheduleRestart(500);
+                    return;
+                }
+
+                processingRef.current = true;
+                await speak("I didn't hear anything clearly. Please try again.");
+                processingRef.current = false;
+                scheduleRestart(1500);
+                return;
+            }
+
+            // Normal end after a recognized result: keep listening flow alive quietly.
+            scheduleRestart(300);
         };
 
         recognition.start();
         setStatus('Listening...');
-    }, [speak]);
+    }, [scheduleRestart, speak]);
+
+    const startListening = useCallback(() => {
+        startSTTAfterTTS(startRecognitionCore);
+    }, [startRecognitionCore, startSTTAfterTTS]);
+    startListeningRef.current = startListening;
 
     // ── Input handler (voice flow logic) ─────────────────────────────────────
     const handleInput = useCallback(async (text) => {
@@ -209,13 +315,13 @@ export default function VoiceLogin() {
             const rawDigits = processPinText(text);
 
             if (rawDigits.length < 4) {
-                await speak(`PIN must be 4 digits. I heard ${rawDigits.length} digit${rawDigits.length === 1 ? '' : 's'}. Please try again.`);
+                await speak(`PIN must be 4 to 6 digits. I heard ${rawDigits.length} digit${rawDigits.length === 1 ? '' : 's'}. Please try again.`);
                 processingRef.current = false;
                 startListening();
                 return;
             }
-            if (rawDigits.length > 4) {
-                await speak(`That sounded like more than 4 digits. Please say each digit individually.`);
+            if (rawDigits.length > 6) {
+                await speak(`That sounded like more than 6 digits. Please say each digit individually.`);
                 processingRef.current = false;
                 startListening();
                 return;
@@ -241,13 +347,32 @@ export default function VoiceLogin() {
         if (res.success) {
             await speak('Login successful. Redirecting.');
             navigate('/student');
-        } else {
-            await speak('Login failed. Please try again.');
-            setStudentId('');
-            setPin('');
-            setStep(0);
-            stepRef.current = 0;
+            return;
         }
+
+        const code = res.code;
+        let message = 'Login failed. Please check your credentials and try again.';
+        if (code === 'STUDENT_NOT_FOUND') {
+            message = 'Student ID not found. Please check your Student ID and try again.';
+        } else if (code === 'WRONG_PIN') {
+            message = 'Incorrect PIN. Please try again.';
+        } else if (code === 'ACCOUNT_LOCKED') {
+            message = 'Your account is temporarily locked due to too many failed attempts. Please try again later.';
+            if (res.locked_until) {
+                message = `${message} Locked until ${res.locked_until}.`;
+            }
+        } else if (code === 'ACCOUNT_INACTIVE') {
+            message = 'Your account is not active. Please contact your administrator.';
+        } else if (code === 'RATE_LIMITED') {
+            message = 'Too many login attempts. Please wait a moment before trying again.';
+        }
+
+        setStatus(message);
+        await speak(message);
+        setStudentId('');
+        setPin('');
+        setStep(0);
+        stepRef.current = 0;
     }, [pinLogin, speak, navigate]);
 
     // ── Start voice flow ──────────────────────────────────────────────────────
@@ -385,8 +510,8 @@ export default function VoiceLogin() {
                         />
                         <input
                             type="password"
-                            placeholder="4-digit PIN"
-                            maxLength="4"
+                            placeholder="4-6 digit PIN"
+                            maxLength="6"
                             className="w-full p-2 border rounded mb-4"
                             style={{ background: 'var(--card)', borderColor: 'var(--border)', color: 'var(--text)' }}
                             value={pin}

@@ -1,5 +1,5 @@
 from bson import ObjectId
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 # ── Lockout configuration ─────────────────────────────────────────────────────
@@ -57,9 +57,13 @@ def is_account_locked(user_doc):
         return False
     if locked_until is None:
         return False
-    if isinstance(locked_until, datetime) and datetime.utcnow() >= locked_until:
-        return False  # Lock has expired
-    return True
+    if not isinstance(locked_until, datetime):
+        try:
+            locked_until = datetime.fromisoformat(str(locked_until))
+        except (ValueError, TypeError):
+            return False  # Unparseable — treat as not locked
+    return datetime.now(timezone.utc) < locked_until
+
 
 
 def record_failed_attempt(db, user_id):
@@ -80,8 +84,8 @@ def record_failed_attempt(db, user_id):
     new_count = user.get("failed_attempts", 0) + 1
     update = {"$set": {"failed_attempts": new_count}}
 
-    if new_count >= _MAX_FAILED_ATTEMPTS:
-        update["$set"]["locked_until"] = datetime.utcnow() + _LOCKOUT_DURATION
+    if new_count == _MAX_FAILED_ATTEMPTS:
+        update["$set"]["locked_until"] = datetime.now(timezone.utc) + _LOCKOUT_DURATION
 
     db.users.update_one({"_id": oid}, update)
     return db.users.find_one({"_id": oid})

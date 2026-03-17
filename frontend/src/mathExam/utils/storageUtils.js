@@ -20,18 +20,29 @@ export const AUTO_SAVE_KEY = 'saarthi_math_exam_autosave';
  * the work until after the current task (e.g. the Redux dispatch that triggered
  * this call) has finished, keeping the UI responsive.
  *
- * @param {Array}  steps
- * @param {string} [examId]
- * @param {string} [savedAt] - ISO timestamp; caller supplies for determinism
+ * @param {Array}    steps
+ * @param {string}   [examId]
+ * @param {string}   [savedAt]      - ISO timestamp; caller supplies for determinism
+ * @param {Function} [onStorageWarning] - Called with a TTS-ready warning string
+ *                                        when localStorage quota is exceeded.
+ *                                        Wire to tts.speak() in the exam component.
  */
-export const saveToLocal = (steps, examId = 'default', savedAt = new Date().toISOString()) => {
+export const saveToLocal = (steps, examId = 'default', savedAt = new Date().toISOString(), onStorageWarning) => {
     queueMicrotask(() => {
         try {
             const data = { examId, steps, savedAt };
             localStorage.setItem(`${AUTO_SAVE_KEY}_${examId}`, JSON.stringify(data));
         } catch (e) {
-            // Catches QuotaExceededError and SecurityError (private browsing)
-            console.warn('[AutoSave] Failed to save to localStorage:', e);
+            if (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
+                // FIX 11: Storage full — notify via TTS so blind students know
+                console.error('[storageUtils] localStorage quota exceeded — exam data NOT saved');
+                onStorageWarning?.(
+                    'Warning: local storage is full. Your answers are held in memory only. Please submit your exam soon to avoid losing your work.'
+                );
+            } else {
+                // SecurityError in private browsing or other unexpected errors
+                console.warn('[storageUtils] Failed to save to localStorage:', e);
+            }
         }
     });
 };

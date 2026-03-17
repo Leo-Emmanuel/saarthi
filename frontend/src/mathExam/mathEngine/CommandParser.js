@@ -67,6 +67,16 @@ const PATTERNS = [
     [/\benter\s+command\s+mode\b/, CMD.ENTER_COMMAND_MODE, {}],
     [/\b(exit|leave|stop)\s+command\s+mode\b/, CMD.EXIT_COMMAND_MODE, {}],
 
+    // ── Reading (HIGH PRIORITY - MORE SPECIFIC PATTERNS FIRST) ──
+    // Read current question (exam question paper)
+    [/\bread\s+(current\s+)?question\b/, CMD.READ_BRIEF, {}],
+    [/\bread\s+the\s+question\b/, CMD.READ_BRIEF, {}],
+    // Read all steps or all questions
+    [/\bread\s+all\b/, CMD.READ_ALL_STEPS, {}],
+    [/\bread.*step/, CMD.READ_ALL_STEPS, {}],
+    [/\bread.*brief/, CMD.READ_BRIEF, {}],
+    [/\bread.*detail/, CMD.READ_DETAILED, {}],
+
     // ── Undo/Redo ──
     [/\bundo\b/, CMD.UNDO, {}],
     [/\bredo\b/, CMD.REDO, {}],
@@ -91,18 +101,12 @@ const PATTERNS = [
     // go to row R column C
     [/\bgo\s+to\s+row\s+(\d+)\s+col(?:umn)?\s+(\d+)\b/, CMD.GO_TO_CELL, (m) => ({ row: parseInt(m[1]) - 1, col: parseInt(m[2]) - 1 })],
 
-    // ── Reading ──
-    [/\bread\s+expression\s+briefly\b/, CMD.READ_BRIEF, {}],
-    [/\bread\s+(briefly|in\s+brief)\b/, CMD.READ_BRIEF, {}],
-    [/\bread\s+expression\s+(in\s+detail|detailed)\b/, CMD.READ_DETAILED, {}],
-    [/\bread\s+(in\s+detail|detailed|fully)\b/, CMD.READ_DETAILED, {}],
-    [/\bread\s+all\s+steps\b/, CMD.READ_ALL_STEPS, {}],
-    [/\bread\s+my\s+position\b/, CMD.READ_POSITION, {}],
-    [/\bwhere\s+am\s+i\b/, CMD.READ_POSITION, {}],
-
     // read [left|right] side of step N
     [/\bread\s+(left|right)\s+side\s+of\s+step\s+(\d+)\b/, CMD.READ_STEP,
         (m) => ({ side: m[1], stepNumber: parseInt(m[2]) - 1 })],
+    
+    // where am i
+    [/\bwhere\s+am\s+i\b/, CMD.READ_POSITION, {}],
 
     // ── Step Management ──
     [/\bcreate\s+(next|new)\s+(aligned\s+)?step\b/, CMD.NEW_STEP, {}],
@@ -217,8 +221,8 @@ export const parseMathDictation = (text) => {
 const parseExpression = (text) => {
     // Try various high-level structures first
 
-    // Integral
-    const intMatch = text.match(/^integral\s+(?:from\s+(.+?)\s+to\s+(.+?)\s+)?of\s+(.+?)\s+d\s*([a-z])$/);
+    // Integral: supports both "integral from X to Y of expr dx" and "integral expr dx"
+    const intMatch = text.match(/^integral\s+(?:from\s+(.+?)\s+to\s+(.+?)\s+of\s+)?(.+?)\s+d\s*([a-z])$/);
     if (intMatch) {
         const lower = intMatch[1] ? parseSimple(intMatch[1]) : null;
         const upper = intMatch[2] ? parseSimple(intMatch[2]) : null;
@@ -274,13 +278,22 @@ const parseExpression = (text) => {
 };
 
 const parseSimple = (text) => {
-    const t = text.trim();
+    let t = text.trim();
+    
+    // Normalize STT variations: squad -> squared
+    t = t.replace(/\bsquad\b/g, 'squared');
 
     // Number
     if (/^-?\d+(\.\d+)?$/.test(t)) return Num(t);
 
     // Infinity
     if (t === 'infinity' || t === 'infinite') return Sym('\\infty');
+
+    // Fraction: X over Y (check BEFORE root so "square root of 29 over 2" works correctly)
+    const fracMatch = t.match(/^(.+?)\s+over\s+(.+)$/);
+    if (fracMatch) {
+        return Fraction(parseSimple(fracMatch[1]), parseSimple(fracMatch[2]));
+    }
 
     // Trig functions: sin of ...
     const trigMatch = t.match(/^(sin|cos|tan|sec|csc|cot|arcsin|arccos|arctan)\s+(?:of\s+)?(.+)$/);
@@ -307,6 +320,22 @@ const parseSimple = (text) => {
     // Brackets
     const brMatch = t.match(/^(?:open\s+bracket|bracket)\s+(.+?)\s+(?:close\s+bracket|end\s+bracket)$/);
     if (brMatch) return Brackets(parseSimple(brMatch[1]));
+
+    // Handle "negative" prefix (unary minus)
+    const negMatch = t.match(/^negative\s+(.+)$/);
+    if (negMatch) {
+        const inner = parseSimple(negMatch[1]);
+        return Multiply(Num(-1), inner);
+    }
+
+    // Handle "plus or minus" (±)
+    if (/\s+plus\s+or\s+minus\s+/.test(t)) {
+        // For now, treat as addition + subtraction pair or as part of expression
+        // This is complex - might need to be handled at a higher level
+        const parts = t.split(/\s+plus\s+or\s+minus\s+/);
+        // Return as sequence showing both possibilities
+        return Sequence([parseSimple(parts[0]), Sym('±'), parseSimple(parts.slice(1).join(' '))]);
+    }
 
     // Plus / minus / times — simple inline
     if (/\s+plus\s+/.test(t)) {

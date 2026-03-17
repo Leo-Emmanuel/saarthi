@@ -53,8 +53,14 @@ function applyRules(text, rules) {
 }
 
 function normalise(text) {
-    return text
-        .toLowerCase()
+    let normalised = text
+        .trim()
+        .toLowerCase();
+
+    // Strip leading filler words often produced in natural dictation.
+    normalised = normalised.replace(/^(?:the|a|an|now|so|then|we have|we get|equals|therefore)\s+/i, '');
+
+    return normalised
         // Preserve literal commas — they are meaningful in math (coordinates, sets, args).
         // Only strip semicolons and colons which are genuine STT noise.
         .replace(/[;:]/g, ' ')

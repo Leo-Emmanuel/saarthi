@@ -21,7 +21,7 @@ export default function useWarningVoiceCommands({
             recognitionRef.current = null;
         }
 
-        speakText(`Warning. You have ${unanswered.length} unanswered questions: ${unanswered.join(', ')}. Say go back to return, or say submit anyway to confirm.`);
+        const warningText = `Warning. You have ${unanswered.length} unanswered questions: ${unanswered.join(', ')}. Say go back to return, or say submit anyway to confirm.`;
 
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRecognition) {
@@ -45,11 +45,20 @@ export default function useWarningVoiceCommands({
             if (spoken.includes('go back')) onBack();
             if (spoken.includes('submit anyway')) onSubmit();
         };
-        try {
-            recognition.start();
-        } catch {
-            onUnavailable?.();
-        }
+        speakText(warningText, {
+            onEnd: () => {
+                if (!mounted) return;
+                try {
+                    recognition.start();
+                } catch {
+                    onUnavailable?.();
+                }
+            },
+            onError: () => {
+                if (!mounted) return;
+                onUnavailable?.();
+            },
+        });
 
         return () => {
             mounted = false;

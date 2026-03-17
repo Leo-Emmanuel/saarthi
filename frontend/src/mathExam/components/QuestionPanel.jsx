@@ -7,17 +7,21 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useSelector } from 'react-redux';
 import { motion } from 'framer-motion';
 import { getTTS } from '../speech/BrowserTTS.js';
+import { mathToSpeech } from '../../utils/mathToSpeech.js';
 
 const QuestionPanel = ({ questions = [] }) => {
-    const { questionIndex } = useSelector(s => s.examSession);
+    const { questionIndex } = useSelector(s => s.examSession ?? { questionIndex: 0 });
     const [isSpeaking, setIsSpeaking] = useState(false);
     const ttsAbortRef = useRef(false);
+    const mountedRef = useRef(true);
 
     const currentQ = questions[questionIndex] || null;
 
     // Helper to format TTS text
-    const formatTTS = (q, idx, withWorth = false) =>
-        `Question ${idx + 1}. ${q.text}. ${withWorth ? 'Worth ' : ''}${q.marks} marks.`;
+    const formatTTS = (q, idx, withWorth = false) => {
+        const spokenQuestion = mathToSpeech(q.text);
+        return `Question ${idx + 1}. ${spokenQuestion}. ${withWorth ? `Worth ${q.marks} mark${q.marks !== 1 ? 's' : ''}.` : ''}`;
+    };
 
     // Centralized TTS handler
     const speakTTS = useCallback(async (items, withWorth = false) => {
@@ -25,17 +29,25 @@ const QuestionPanel = ({ questions = [] }) => {
         setIsSpeaking(true);
         ttsAbortRef.current = false;
         const tts = getTTS();
-        for (let i = 0; i < items.length; i++) {
-            if (ttsAbortRef.current) break;
-            const { q, idx } = items[i];
-            await tts.speakNow(formatTTS(q, idx, withWorth));
+        try {
+            for (let i = 0; i < items.length; i++) {
+                if (ttsAbortRef.current) break;
+                const { q, idx } = items[i];
+                await tts.speakNow(formatTTS(q, idx, withWorth));
+            }
+        } catch (e) {
+            if (e?.message !== 'cancelled') {
+                console.error('QuestionPanel TTS error:', e);
+            }
+        } finally {
+            if (mountedRef.current) setIsSpeaking(false);
         }
-        setIsSpeaking(false);
     }, [isSpeaking]);
 
     // Cleanup on unmount
     useEffect(() => {
         return () => {
+            mountedRef.current = false;
             ttsAbortRef.current = true;
             getTTS().cancel && getTTS().cancel();
         };

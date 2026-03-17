@@ -18,11 +18,21 @@ _log = logging.getLogger(__name__)
 
 # ── Regex patterns ────────────────────────────────────────────────────────────
 _QUESTION_RE = re.compile(
-    r"^\s*(?:Q|Question)?\s*\d+[.\)]\s*(.*)", re.IGNORECASE
+    r"^\s*(?:Q|Question)?\s*\d+[.\)\:]\s*(.*)", re.IGNORECASE
 )
 # Match options A-D (or a-d) followed by ) or . and a space
 _OPTION_RE = re.compile(r"^[A-Da-d][)\.]\s")
 _CORRECT_ANS_RE = re.compile(r"^correct\s*answer\s*:\s*(.*)", re.IGNORECASE)
+
+
+# Question line filter: must start with number (optional Q) and have real content.
+def is_question_line(line):
+    line = line.strip()
+    if len(line) < 10:
+        return False
+    if re.match(r'^(?:Q|Question)?\s*\d+[\.\)\:]', line, re.IGNORECASE):
+        return True
+    return False
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -40,8 +50,7 @@ def parse_pdf(file_path):
 
         questions = _parse_numbered(lines)
         if not questions:
-            _log.info("No numbered questions found; falling back to implicit mode.")
-            questions = _parse_implicit(lines)
+            _log.info("No numbered questions found; strict filter returned no questions.")
 
         _log.info("Extracted %d questions from PDF.", len(questions))
         return questions
@@ -99,14 +108,17 @@ def _parse_numbered(lines):
     current_answer = None  # correct answer seen while building current question
 
     for line in lines:
-        match = _QUESTION_RE.match(line)
-
-        if match:
-            # Flush the previous question
-            if current_text:
-                questions.append(_flush_question(current_text, current_answer))
-                current_answer = None
-            current_text = match.group(1)
+        if is_question_line(line):
+            match = _QUESTION_RE.match(line)
+            if match:
+                # Flush the previous question
+                if current_text:
+                    questions.append(_flush_question(current_text, current_answer))
+                    current_answer = None
+                current_text = match.group(1)
+                continue
+        elif not current_text:
+            # Not a question start and no active question buffer
             continue
 
         # We're inside a question — classify the line
@@ -124,7 +136,7 @@ def _parse_numbered(lines):
             continue
 
         # Regular continuation text
-        current_text += " " + line
+        current_text = f"{current_text} {line}"
 
     # Flush last question
     if current_text:
@@ -136,30 +148,5 @@ def _parse_numbered(lines):
 # ── Pass 2: implicit questions (stateless heuristic parser) ───────────────────
 
 def _parse_implicit(lines):
-    """Heuristic fallback for PDFs without numbered questions."""
-    questions = []
-
-    for line in lines:
-        # Option line → skip
-        if _is_option_line(line):
-            continue
-
-        # Correct answer → attach to the previous question
-        ans = _try_correct_answer(line)
-        if ans is not None:
-            if questions:
-                questions[-1]["correct_answer"] = ans
-            continue
-
-        # Skip section/page headers
-        lower = line.lower()
-        if lower.startswith("section") or lower.startswith("page"):
-            continue
-
-        # Heuristic: lines ending with ? or :, or long non-numeric lines
-        if line.endswith("?") or line.endswith(":") or (
-            len(line) > 20 and not line[0].isdigit()
-        ):
-            questions.append(_flush_question(line))
-
-    return questions
+    """Deprecated: strict filter requires numbered question starts."""
+    return []

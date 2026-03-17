@@ -8,7 +8,7 @@ import logging
 import os
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
-from services.math_parser import MathParser
+from services.math_parser import MathParser, _MAX_EXPR_LEN
 from services.tts import TTSService
 from services.stt import STTService
 from services.upload import UploadService
@@ -20,11 +20,22 @@ tts_service = TTSService()
 stt_service = STTService()
 _log = logging.getLogger(__name__)
 
+# Import shared limiter from app (set up in app.py)
+def _get_limiter():
+    from app import limiter
+    return limiter
+
 
 @tools_bp.route("/math/solve", methods=["POST"])
 @jwt_required(optional=True)
 def solve_math():
     """Parse and solve a math expression."""
+    # FIX 8: Rate limit — 15 requests per minute per IP
+    try:
+        _get_limiter().limit("15 per minute")(lambda: None)()
+    except Exception:
+        return jsonify({"error": "Rate limit exceeded. Please wait before sending more requests."}), 429
+
     data = request.get_json(silent=True)
     if not data:
         return jsonify({"error": "Request body must be valid JSON"}), 400
@@ -33,7 +44,13 @@ def solve_math():
     if not expression:
         return jsonify({"error": "No expression provided"}), 400
 
+    # FIX 8: Length guard as second line of defense (also enforced in MathParser)
+    if len(expression) > _MAX_EXPR_LEN:
+        return jsonify({"error": "Expression too long"}), 400
+
     result = math_parser.parse_and_solve(expression)
+    if "error" in result:
+        return jsonify(result), 400
     return jsonify(result)
 
 
@@ -50,6 +67,8 @@ def text_to_speech():
         return jsonify({"error": "No text provided"}), 400
 
     audio_url = tts_service.speak(text)
+    if not audio_url:
+        return jsonify({"error": "TTS synthesis failed"}), 500
     return jsonify({"audio_url": audio_url})
 
 
@@ -75,15 +94,12 @@ def speech_to_text():
     try:
         result = stt_service.transcribe(file_path)
 
-        # ✅ Use a structured error check instead of string-prefix matching.
-        # The STT service may return a dict with an "error" key or a plain
-        # string. We handle both without confusing data with errors.
-        if isinstance(result, dict) and "error" in result:
+        # FIX 3: STTService now always returns a structured dict.
+        # Check for error key — if absent, return the transcription text.
+        if result.get("error"):
             return jsonify({"error": result["error"]}), 422
-        if isinstance(result, str) and result.startswith("Error:"):
-            return jsonify({"error": result[len("Error:"):].strip()}), 422
 
-        return jsonify({"transcription": result})
+        return jsonify({"transcription": result["text"]})
     except Exception:
         _log.exception("Transcription failed")
         return jsonify({"error": "Transcription failed"}), 500

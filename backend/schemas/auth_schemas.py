@@ -22,7 +22,7 @@ class VoiceLoginSchema(Schema):
     )
     pin = fields.String(
         required=True,
-        validate=[validate.Length(equal=4), validate.Regexp(r"^\d{4}$", error="PIN must be exactly 4 digits")],
+        validate=[validate.Length(min=4, max=6), validate.Regexp(r"^\d{4,6}$", error="PIN must be 4 to 6 digits")],
         error_messages={"required": "PIN is required"},
     )
 
@@ -35,9 +35,12 @@ class VoiceLoginSchema(Schema):
         if isinstance(data.get("studentId"), str):
             data["studentId"] = data["studentId"].strip()
         if isinstance(data.get("pin"), str):
-            # Strip whitespace and limit to first 4 digits only
-            digits = "".join(c for c in data["pin"] if c.isdigit())[:4]
-            data["pin"] = digits
+            pin_val = str(data["pin"])
+            digits_list = []
+            for char in pin_val:
+                if char.isdigit() and len(digits_list) < 6:
+                    digits_list.append(char)
+            data["pin"] = "".join(digits_list)
         return data
 
 
@@ -62,17 +65,20 @@ class RegisterSchema(Schema):
 class RegisterStudentSchema(Schema):
     name = fields.String(
         required=True,
-        validate=validate.Length(min=1, max=200),
+        validate=validate.Length(min=2, max=200),
         error_messages={"required": "Name is required"},
     )
     studentId = fields.String(
         required=True,
-        validate=validate.Length(min=1, max=50),
+        validate=[
+            validate.Length(min=1, max=50),
+            validate.Regexp(r"^[A-Za-z0-9]+$", error="Student ID must be alphanumeric with no spaces"),
+        ],
         error_messages={"required": "Student ID is required"},
     )
     pin = fields.String(
         required=True,
-        validate=[validate.Length(equal=4), validate.Regexp(r"^\d{4}$", error="PIN must be exactly 4 digits")],
+        validate=[validate.Length(min=4, max=6), validate.Regexp(r"^\d{4,6}$", error="PIN must be 4 to 6 digits")],
         error_messages={"required": "PIN is required"},
     )
     department = fields.String(

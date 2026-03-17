@@ -9,8 +9,10 @@ live in the _service helpers below so they can be reused or tested
 independently.
 """
 
+import logging
 import random
 import string
+from datetime import datetime, timezone
 from bson import ObjectId
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
@@ -22,6 +24,7 @@ admin_bp = Blueprint("admin", __name__)
 _users = db.users
 _exams = db.exams
 _submissions = db.submissions
+_log = logging.getLogger(__name__)
 
 # Default page size for paginated endpoints
 _DEFAULT_PAGE_SIZE = 50
@@ -136,17 +139,23 @@ def _fetch_submission_detail(submission_oid):
     }
 
 
-def _delete_student_and_submissions(student_oid):
+def _delete_student_and_submissions(student_id):
     """Delete a student and cascade-delete their submissions.
 
+    Accepts either MongoDB ObjectId or custom studentId string.
     Returns (student_name, deleted_submission_count) or None if not found.
     """
-    student = _users.find_one({"_id": student_oid, "role": "student"})
+    student = None
+    oid = _safe_object_id(student_id)
+    if oid is not None:
+        student = _users.find_one({"_id": oid, "role": "student"})
+    if not student:
+        student = _users.find_one({"studentId": student_id, "role": "student"})
     if not student:
         return None
 
-    deleted = _submissions.delete_many({"user_id": student_oid})
-    _users.delete_one({"_id": student_oid})
+    deleted = _submissions.delete_many({"user_id": student["_id"]})
+    _users.delete_one({"_id": student["_id"]})
     return student.get("name", "Unknown"), deleted.deleted_count
 
 
@@ -243,19 +252,11 @@ def delete_student(student_id):
     if err:
         return err
 
-    oid = _safe_object_id(student_id)
-    if oid is None:
-        return jsonify({"error": "Invalid student ID"}), 400
-
-    result = _delete_student_and_submissions(oid)
+    result = _delete_student_and_submissions(student_id)
     if result is None:
         return jsonify({"error": "Student not found"}), 404
 
-    name, subs_removed = result
-    return jsonify({
-        "message": f"Student '{name}' deleted",
-        "submissions_removed": subs_removed,
-    })
+    return jsonify({"message": "Student deleted successfully"}), 200
 
 
 # ── 5. Reset student PIN ─────────────────────────────────────────────────────
@@ -316,8 +317,8 @@ def update_existing_mcqs():
             else:
                 updated_questions.append(question)
         
-        # Update the exam if any questions were changed
-        if len(updated_questions) != len(questions):
+        # Persist processed questions for this exam
+        if updated_questions:
             _exams.update_one(
                 {"_id": exam_id},
                 {"$set": {"questions": updated_questions}}
@@ -358,7 +359,7 @@ def update_student_tts(student_id):
             # Try by ObjectId if studentId not found
             try:
                 student = _users.find_one({"_id": ObjectId(student_id)})
-            except:
+            except Exception:
                 pass
         
         if not student:
@@ -383,3 +384,137 @@ def update_student_tts(student_id):
     except Exception as e:
         _log.exception("Failed to update TTS settings")
         return jsonify({"error": f"Failed to update TTS settings: {str(e)}"}), 500
+
+
+@admin_bp.route("/staff", methods=["POST"])
+@jwt_required()
+def create_staff():
+    """Create a teacher/admin account."""
+    _, err = _get_admin_or_error()
+    if err:
+        return err
+
+    data = request.get_json(silent=True) or {}
+    name = str(data.get("name", "")).strip()
+    email = str(data.get("email", "")).strip().lower()
+    password = str(data.get("password", "")).strip()
+    role = str(data.get("role", "teacher")).strip()
+
+    if not name:
+        return jsonify({"error": "Name is required"}), 400
+    if not email:
+        return jsonify({"error": "Email is required"}), 400
+    if not password or len(password) < 6:
+        return jsonify({"error": "Password must be at least 6 characters"}), 400
+    if role not in ("teacher", "admin"):
+        return jsonify({"error": "Role must be teacher or admin"}), 400
+
+    if _users.find_one({"email": email}):
+        return jsonify({"error": "Email already registered"}), 400
+
+    hashed = generate_password_hash(password)
+    new_staff = {
+        "name": name,
+        "email": email,
+        "password": hashed,
+        "role": role,
+        "department": "MCA",
+        "created_at": datetime.now(timezone.utc),
+    }
+    _users.insert_one(new_staff)
+    _log.info("Staff created: %s (%s)", email, role)
+    return jsonify({"message": f"{role.capitalize()} created successfully"}), 201
+
+
+@admin_bp.route("/staff", methods=["GET"])
+@jwt_required()
+def get_staff():
+    """Return all teacher/admin accounts."""
+    _, err = _get_admin_or_error()
+    if err:
+        return err
+
+    staff = list(_users.find(
+        {"role": {"$in": ["teacher", "admin"]}},
+        {"password": 0, "pin": 0}
+    ))
+    for member in staff:
+        member["_id"] = str(member["_id"])
+    return jsonify(staff), 200
+
+
+@admin_bp.route("/staff/<staff_id>", methods=["DELETE"])
+@jwt_required()
+def delete_staff(staff_id):
+    """Delete a teacher/admin account by id."""
+    admin, err = _get_admin_or_error()
+    if err:
+        return err
+
+    oid = _safe_object_id(staff_id)
+    if not oid:
+        return jsonify({"error": "Invalid ID"}), 400
+    if oid == admin["_id"]:
+        return jsonify({"error": "Cannot delete your own account"}), 400
+
+    result = _users.delete_one({"_id": oid, "role": {"$in": ["teacher", "admin"]}})
+    if result.deleted_count == 0:
+        return jsonify({"error": "Staff member not found"}), 404
+    return jsonify({"message": "Staff member deleted"}), 200
+
+
+# ── System settings ────────────────────────────────────────────────────────────
+
+_DEFAULT_SYSTEM_SETTINGS = {
+    "default_tts": {"rate": 1.0, "pitch": 1.0, "voice": None},
+    "default_exam_duration": 60,
+}
+
+
+def _merge_system_settings(admin_doc):
+    """Return system settings from the admin document, merged with defaults."""
+    stored = admin_doc.get("system_settings") or {}
+    merged = {**_DEFAULT_SYSTEM_SETTINGS, **stored}
+    merged["default_tts"] = {
+        **_DEFAULT_SYSTEM_SETTINGS["default_tts"],
+        **(merged.get("default_tts") or {}),
+    }
+    return merged
+
+
+@admin_bp.route("/settings", methods=["GET"])
+@jwt_required()
+def get_system_settings():
+    """Return the system-wide settings stored on the admin account."""
+    admin, err = _get_admin_or_error()
+    if err:
+        return err
+    return jsonify(_merge_system_settings(admin)), 200
+
+
+@admin_bp.route("/settings", methods=["PATCH"])
+@jwt_required()
+def update_system_settings():
+    """Update one or more system-wide settings on the admin account."""
+    admin, err = _get_admin_or_error()
+    if err:
+        return err
+
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    current = _merge_system_settings(admin)
+
+    if "default_tts" in data:
+        tts = data["default_tts"]
+        current["default_tts"]["rate"] = max(0.5, min(2.0, float(tts.get("rate", current["default_tts"]["rate"]))))
+        current["default_tts"]["pitch"] = max(0.5, min(2.0, float(tts.get("pitch", current["default_tts"]["pitch"]))))
+        current["default_tts"]["voice"] = tts.get("voice", current["default_tts"]["voice"])
+
+    if "default_exam_duration" in data:
+        current["default_exam_duration"] = max(5, min(300, int(data["default_exam_duration"])))
+
+    _users.update_one({"_id": admin["_id"]}, {"$set": {"system_settings": current}})
+    _log.info("System settings updated by admin %s", admin.get("email"))
+    return jsonify(current), 200

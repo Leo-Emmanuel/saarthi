@@ -106,6 +106,7 @@ export default function ExamControlsPanel({
     onSubmit,
     canUndo = false,
     canRedo = false,
+    readOnly = false,
 }) {
     return (
         <aside className="exam-right fixed top-[56px] bottom-[54px] right-0 overflow-y-auto">
@@ -128,6 +129,7 @@ export default function ExamControlsPanel({
                     desc="Add an aligned equation step"
                     voice="create next aligned step"
                     onClick={onNewStep}
+                    disabled={readOnly}
                 />
 
                 <div className="grid grid-cols-2 gap-3">
@@ -149,24 +151,49 @@ export default function ExamControlsPanel({
                     />
                 </div>
 
-                <ControlCard
-                    icon="📋"
-                    title="Review All"
-                    desc="Hear all steps read aloud"
-                    voice="review all answers"
-                    onClick={onReviewAll}
-                />
+                <button
+                    type="button"
+                    onClick={() => {
+                        onReviewAll?.();
+                    }}
+                    style={{
+                        width: '100%',
+                        padding: '12px 16px',
+                        background: 'var(--surface)',
+                        border: '2px solid var(--border)',
+                        borderRadius: 8,
+                        color: 'var(--text)',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                        minHeight: 48,
+                    }}
+                >
+                    📋 Review All
+                </button>
 
                 <div style={{ height: 8 }} />
 
-                <ControlCard
-                    icon="⛔"
-                    title="Submit Paper"
-                    desc="Finalize and submit"
-                    voice="submit paper"
-                    onClick={onSubmit}
-                    danger
-                />
+                <button
+                    type="button"
+                    onClick={() => {
+                        onSubmit?.();
+                    }}
+                    style={{
+                        width: '100%',
+                        padding: '12px 16px',
+                        background: 'var(--danger)',
+                        border: '2px solid var(--danger)',
+                        borderRadius: 8,
+                        color: 'var(--white)',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                        minHeight: 48,
+                    }}
+                >
+                    ✅ Submit Exam
+                </button>
             </div>
         </aside>
     );

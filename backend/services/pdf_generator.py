@@ -86,9 +86,9 @@ class PDFGenerator:
 
             # ── Answers ───────────────────────────────────────────────────
             # answers is a dict of {question_id: answer_text}
-            answers = submission_data.get("answers") or {}
-
-            for q_id, answer_text in answers.items():
+            answers_raw = submission_data.get("answers") or {}
+            answers_dict = dict(answers_raw)
+            for q_id, answer_text in answers_dict.items():
                 if y_pos < 100:
                     c.showPage()
                     y_pos = height - 50
@@ -99,8 +99,9 @@ class PDFGenerator:
 
                 c.setFont("Helvetica", 12)
                 # Guard against None / non-string answer values
-                safe_text = str(answer_text) if answer_text is not None else ""
-                for line in safe_text.split("\n"):
+                safe_text: str = str(answer_text) if answer_text is not None else ""
+                lines = safe_text.split("\n")
+                for line in lines:
                     if y_pos < 50:
                         c.showPage()
                         y_pos = height - 50

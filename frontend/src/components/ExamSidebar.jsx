@@ -18,7 +18,7 @@ export default function ExamSidebar({
     const current = questions[currentIndex] ?? null;
 
     return (
-        <aside className="exam-left fixed top-[56px] bottom-[54px] left-0 flex flex-col">
+        <aside className="exam-left fixed top-[56px] bottom-[54px] left-0 flex flex-col" role="navigation" aria-label="Question navigator">
             {/* Header */}
             <div
                 className="flex items-center justify-between gap-2"
@@ -70,7 +70,8 @@ export default function ExamSidebar({
                                             onJump?.(i);
                                         }
                                     }}
-                                    aria-label={`Open question ${i + 1}`}
+                                    aria-current={active ? "step" : undefined}
+                                    aria-label={`Question ${i + 1}, ${answeredQ ? "answered" : "not yet answered"}`}
                                     className="exam-focus"
                                     style={{
                                         width: '100%',

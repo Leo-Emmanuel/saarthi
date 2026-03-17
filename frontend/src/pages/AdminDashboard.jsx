@@ -1,6 +1,7 @@
 import Navbar from '../components/Navbar';
 import StudentPanel from './StudentPanel';
 import ExamPanel from './ExamPanel';
+import usePageTitle from '../hooks/usePageTitle';
 
 /**
  * AdminDashboard — thin layout that composes the two admin panels.
@@ -8,6 +9,7 @@ import ExamPanel from './ExamPanel';
  * Domain logic lives in StudentPanel, ExamPanel, and adminApi.
  */
 export default function AdminDashboard() {
+    usePageTitle('Admin Dashboard');
     return (
         <div
             className="min-h-screen"

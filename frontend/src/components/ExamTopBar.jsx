@@ -16,7 +16,7 @@ export default function ExamTopBar({
     const timerTextColor = isTimeCritical ? 'var(--red)' : 'var(--yellow)';
 
     return (
-        <header className="exam-topbar fixed top-0 left-0 right-0 z-50">
+        <header className="exam-topbar fixed top-0 left-0 right-0 z-50" role="banner" aria-label="Exam controls and timer">
             <div className="h-full flex items-center gap-3 px-4">
                 {/* Brand */}
                 <div
@@ -59,7 +59,9 @@ export default function ExamTopBar({
                 <div className="flex-1 flex justify-center">
                     <div
                         role="timer"
-                        aria-label="Time remaining"
+                        aria-label={`Time remaining: ${timerText || '--:--:--'}`}
+                        aria-live="polite"
+                        aria-atomic="true"
                         className="exam-mono flex items-center gap-2 px-3"
                         style={{
                             height: 36,

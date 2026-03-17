@@ -6,13 +6,41 @@ import MathRenderer from '../components/MathRenderer';
  */
 export default function GradingPanel({
     questions, answers, audioFiles, grades,
-    onGradeChange, feedback, onFeedbackChange, totalScore, onSubmit,
+    onGradeChange, feedback, onFeedbackChange, totalScore, onSubmit, saveStatus = null,
 }) {
+    const maxScore = questions.reduce((sum, q) => sum + (q.marks || 1), 0);
+    const percentage = maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : 0;
+
     return (
         <div
             className="w-full md:w-1/2 p-6 overflow-y-auto"
             style={{ background: 'var(--bg)', color: 'var(--text)' }}
         >
+            {saveStatus === 'success' && (
+                <div role="status" aria-live="polite" style={{
+                    background: 'rgba(0,255,136,0.12)',
+                    color: 'var(--success)',
+                    padding: '10px 16px',
+                    borderRadius: 8,
+                    border: '2px solid var(--success)',
+                    marginBottom: 12,
+                }}>
+                    ✅ Grades saved successfully
+                </div>
+            )}
+            {saveStatus === 'error' && (
+                <div role="alert" aria-live="assertive" style={{
+                    background: 'rgba(255,68,68,0.12)',
+                    color: 'var(--danger)',
+                    padding: '10px 16px',
+                    borderRadius: 8,
+                    border: '2px solid var(--danger)',
+                    marginBottom: 12,
+                }}>
+                    ❌ Failed to save grades — please try again
+                </div>
+            )}
+
             <h2
                 className="mb-6 pb-2"
                 style={{ fontSize: 20, fontWeight: 700, borderBottom: '3px solid var(--border)' }}
@@ -99,6 +127,26 @@ export default function GradingPanel({
                         value={feedback}
                         onChange={(e) => onFeedbackChange(e.target.value)}
                     />
+                </div>
+
+                <div
+                    className="mt-6 p-4 rounded"
+                    style={{ background: 'var(--card)', border: '1px solid var(--border)' }}
+                >
+                    <div className="font-bold text-lg" style={{ color: 'var(--text)' }}>
+                        Score: {totalScore} / {maxScore} ({percentage}%)
+                    </div>
+                    <div
+                        aria-hidden="true"
+                        style={{
+                            marginTop: 8,
+                            fontFamily: 'monospace',
+                            color: 'var(--yellow)',
+                            letterSpacing: '1px',
+                        }}
+                    >
+                        [{`${'█'.repeat(Math.round((percentage / 100) * 20))}${'░'.repeat(20 - Math.round((percentage / 100) * 20))}`}]
+                    </div>
                 </div>
 
                 <div

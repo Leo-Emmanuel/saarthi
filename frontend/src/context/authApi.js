@@ -18,6 +18,9 @@ async function safe(promise, fallbackMsg = 'Request failed') {
         return {
             success: false,
             error: error.response?.data?.error || fallbackMsg,
+            fields: error.response?.data?.fields || null,
+            code: error.response?.data?.code || null,
+            locked_until: error.response?.data?.locked_until || null,
         };
     }
 }

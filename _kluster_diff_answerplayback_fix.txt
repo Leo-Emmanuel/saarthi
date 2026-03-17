@@ -1,0 +1,628 @@
+﻿diff --git a/frontend/src/components/AnswerPlayback.jsx b/frontend/src/components/AnswerPlayback.jsx
+index fe8243d..2bd474c 100644
+--- a/frontend/src/components/AnswerPlayback.jsx
++++ b/frontend/src/components/AnswerPlayback.jsx
+@@ -1,76 +1,277 @@
+-import { useState, useEffect, useCallback, useRef } from 'react';
++import {
++  forwardRef,
++  memo,
++  useCallback,
++  useEffect,
++  useImperativeHandle,
++  useRef,
++  useState,
++} from 'react';
+ 
+-const AnswerPlayback = ({ questions, answers, onEdit, onComplete, examType, speak, cancel }) => {
++const AnswerPlayback = memo(forwardRef(function AnswerPlayback({
++  show = true,
++  questions = [],
++  answers = {},
++  onEdit,
++  onComplete,
++  onClose,
++  onUpdateAnswer,
++  examType,
++  speak,
++  cancel,
++}, ref) {
+   const [playbackIndex, setPlaybackIndex] = useState(0);
+   const [isReading, setIsReading] = useState(false);
+-  const [reviewed, setReviewed] = useState([]);
++  const [changingAnswer, setChangingAnswer] = useState(false);
++
++  const reviewRecRef = useRef(null);
++  const changingAnswerRef = useRef(false);
++  const handleNextRef = useRef(null);
++  const handlePrevRef = useRef(null);
++  const handleChangeRef = useRef(null);
++  const handleRepeatRef = useRef(null);
++  const handleSkipAllRef = useRef(null);
+ 
+   const currentQuestion = questions[playbackIndex];
+-  const currentQuestionId = currentQuestion?._id?.toString();
+-  const currentAnswer = answers[currentQuestionId] || "No answer given";
++  const currentQuestionId = currentQuestion?._id != null ? String(currentQuestion._id) : '';
++  const currentRawAnswer = answers?.[currentQuestionId] ?? '';
++  const currentAnswer = String(currentRawAnswer || '').trim() || 'No answer given';
++  const total = questions.length;
++  const current = playbackIndex + 1;
++  const pct = total > 0 ? Math.round((current / total) * 100) : 0;
++
++  const handleNext = useCallback(() => {
++    if (changingAnswerRef.current) return;
++    if (playbackIndex >= questions.length - 1) {
++      onComplete?.();
++      return;
++    }
++    setPlaybackIndex(playbackIndex + 1);
++  }, [onComplete, playbackIndex, questions.length]);
++
++  const handlePrev = useCallback(() => {
++    if (changingAnswerRef.current) return;
++    if (playbackIndex > 0) {
++      setPlaybackIndex(playbackIndex - 1);
++    } else {
++      speak?.('This is the first question.');
++    }
++  }, [playbackIndex, speak]);
+ 
+   const readCurrentAnswer = useCallback(() => {
+-    if (!currentQuestion) return;
++    if (!currentQuestion || !speak || changingAnswerRef.current) return undefined;
+ 
+-    const ans = answers[currentQuestionId] || "No answer given";
+-    const text = `Question ${playbackIndex + 1}: ${currentQuestion.text}. Your answer: ${ans}. Say change to edit or next to keep.`;
++    const ans = answers?.[currentQuestionId] || 'No answer given';
++    const text =
++      `Question ${playbackIndex + 1} of ${questions.length}. ` +
++      `${currentQuestion.text}. ` +
++      `Your answer is: ${ans}. ` +
++      'Say next to keep, change to edit, previous to go back, ' +
++      'or repeat to hear again.';
+ 
+     if (cancel) cancel();
+-
+-    // Slight delay to ensure prior cancellation finishes to prevent interruption errors
++    setIsReading(true);
+     const timer = setTimeout(() => {
+-      if (speak) {
+-        speak(text, {
+-          rate: 0.9,
+-          onStart: () => setIsReading(true),
+-          onEnd: () => setIsReading(false),
+-          onError: (e) => console.error('AnswerPlayback TTS error:', e),
+-          onInterrupt: (e) => {
+-            console.log('AnswerPlayback TTS interrupted:', e);
+-            setIsReading(false);
+-          }
+-        });
++      speak(text, {
++        rate: 0.9,
++        onEnd: () => setIsReading(false),
++        onError: () => setIsReading(false),
++      });
++    }, 300);
++    return () => clearTimeout(timer);
++  }, [
++    currentQuestion,
++    currentQuestionId,
++    answers,
++    playbackIndex,
++    questions.length,
++    speak,
++    cancel,
++  ]);
++
++  const startReviewSTT = useCallback(() => {
++    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
++    if (!SR) return;
++
++    if (reviewRecRef.current) {
++      try { reviewRecRef.current.abort(); } catch { /* noop */ }
++    }
++
++    const rec = new SR();
++    rec.continuous = true;
++    rec.interimResults = false;
++    rec.lang = 'en-US';
++    reviewRecRef.current = rec;
++
++    rec.onresult = (event) => {
++      const t = event.results[event.results.length - 1][0]
++        .transcript.toLowerCase().trim();
++      console.log('[Review STT] heard:', t);
++
++      if (t.includes('skip')) handleSkipAllRef.current?.();
++      else if (t.includes('next') || t.includes('keep')) handleNextRef.current?.();
++      else if (t.includes('previous') || t.includes('back')) handlePrevRef.current?.();
++      else if (t.includes('change')) handleChangeRef.current?.();
++      else if (t.includes('repeat')) handleRepeatRef.current?.();
++    };
++
++    rec.onerror = (e) => {
++      if (e.error === 'aborted') return;
++      setTimeout(startReviewSTT, 400);
++    };
++
++    rec.onend = () => {
++      if (!changingAnswerRef.current) {
++        setTimeout(startReviewSTT, 300);
+       }
+-    }, 100);
++    };
+ 
+-    return () => clearTimeout(timer);
+-  }, [currentQuestion, currentQuestionId, answers, playbackIndex, speak, cancel]);
++    try {
++      rec.start();
++      console.log('[Review STT] started');
++    } catch (e) {
++      console.log('[Review STT] start error:', e.message);
++    }
++  }, []);
+ 
+-  useEffect(() => {
+-    const cleanup = readCurrentAnswer();
+-    return cleanup;
+-  }, [readCurrentAnswer]);
++  const startChangeSTT = useCallback(() => {
++    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
++    if (!SR) return;
++
++    const rec = new SR();
++    rec.continuous = false;
++    rec.interimResults = false;
++    rec.lang = 'en-US';
+ 
+-  const handleNext = () => {
+-    const nextIndex = playbackIndex + 1;
+-    if (nextIndex >= questions.length) {
+-      onComplete();
++    rec.onresult = (event) => {
++      const transcript = event.results[0][0].transcript.toLowerCase().trim();
++      console.log('[Review Change STT] heard:', transcript);
++
++      let newAnswer = transcript;
++      if (/\boption a\b|^a$/.test(transcript)) newAnswer = 'A';
++      else if (/\boption b\b|^b$/.test(transcript)) newAnswer = 'B';
++      else if (/\boption c\b|^c$/.test(transcript)) newAnswer = 'C';
++      else if (/\boption d\b|^d$/.test(transcript)) newAnswer = 'D';
++
++      const qId = currentQuestion?._id?.toString?.() || (currentQuestion?._id != null ? String(currentQuestion._id) : '');
++      if (qId && onUpdateAnswer) {
++        onUpdateAnswer(qId, newAnswer);
++      }
++
++      setChangingAnswer(false);
++
++      speak?.(`Answer updated to: ${newAnswer}. Continuing review.`, {
++        rate: 0.9,
++        onEnd: () => {
++          startReviewSTT();
++        },
++      });
++    };
++
++    rec.onerror = (e) => {
++      if (e.error === 'aborted') return;
++      setChangingAnswer(false);
++      speak?.('Could not hear your answer. Please try again.', {
++        onEnd: () => startReviewSTT(),
++      });
++    };
++
++    try {
++      rec.start();
++    } catch (e) {
++      console.error('[Review Change STT] failed to start:', e);
++    }
++  }, [currentQuestion, onUpdateAnswer, speak, startReviewSTT]);
++
++  const handleChange = useCallback(() => {
++    // Backward compatibility for non-review contexts that still depend on onEdit.
++    if (!onUpdateAnswer && onEdit) {
++      onEdit(playbackIndex);
++      return;
++    }
++    if (!currentQuestion || !speak) return;
++    setChangingAnswer(true);
++
++    if (reviewRecRef.current) {
++      try { reviewRecRef.current.abort(); } catch { /* noop */ }
++    }
++
++    const q = currentQuestion;
++    let changeText = `Changing answer for Question ${playbackIndex + 1}. ${q.text}.`;
++    if (q.type === 'mcq' && Array.isArray(q.options) && q.options.length > 0) {
++      const letters = ['A', 'B', 'C', 'D'];
++      const opts = q.options
++        .filter(Boolean)
++        .slice(0, 4)
++        .map((o, i) => `Option ${letters[i]}: ${o}`)
++        .join('. ');
++      changeText += ` ${opts}.`;
++      changeText += ' Please say Option A, Option B, Option C, or Option D.';
+     } else {
+-      setPlaybackIndex(nextIndex);
+-      setReviewed([...reviewed, currentQuestionId]);
++      changeText += ' Please say your new answer now.';
+     }
+-  };
+ 
+-  const handleChange = () => {
+-    onEdit(playbackIndex);
+-  };
++    if (cancel) cancel();
++    speak(changeText, {
++      rate: 0.9,
++      onEnd: () => {
++        startChangeSTT();
++      },
++    });
++  }, [cancel, currentQuestion, onEdit, onUpdateAnswer, playbackIndex, speak, startChangeSTT]);
+ 
+-  const handleRepeat = () => {
++  const handleRepeat = useCallback(() => {
++    if (changingAnswerRef.current) return;
+     readCurrentAnswer();
+-  };
++  }, [readCurrentAnswer]);
+ 
+-  const handleSkipAll = () => {
+-    onComplete();
+-  };
++  const handleSkipAll = useCallback(() => {
++    if (changingAnswerRef.current) return;
++    onComplete?.();
++  }, [onComplete]);
+ 
+-  // Auto-advance when reaching the end
+   useEffect(() => {
+-    if (playbackIndex >= questions.length) {
+-      onComplete();
+-    }
+-  }, [playbackIndex, questions.length, onComplete]);
++    changingAnswerRef.current = changingAnswer;
++  }, [changingAnswer]);
++
++  useEffect(() => {
++    const cleanup = readCurrentAnswer();
++    return cleanup;
++  }, [readCurrentAnswer]);
++
++  useImperativeHandle(ref, () => ({
++    startReview: () => {
++      console.log('[Review] startReview() called');
++      setPlaybackIndex(0);
++    },
++  }), []);
++
++  useEffect(() => { handleNextRef.current = handleNext; }, [handleNext]);
++  useEffect(() => { handlePrevRef.current = handlePrev; }, [handlePrev]);
++  useEffect(() => { handleChangeRef.current = handleChange; }, [handleChange]);
++  useEffect(() => { handleRepeatRef.current = handleRepeat; }, [handleRepeat]);
++  useEffect(() => { handleSkipAllRef.current = handleSkipAll; }, [handleSkipAll]);
++
++  // Store startReviewSTT in a ref so the mount effect never depends on function identity.
++  const startReviewSTTRef = useRef(startReviewSTT);
++  useEffect(() => {
++    startReviewSTTRef.current = startReviewSTT;
++  }, [startReviewSTT]);
++
++  useEffect(() => {
++    const t = setTimeout(() => {
++      startReviewSTTRef.current?.();
++    }, 2000);
++    return () => {
++      clearTimeout(t);
++      if (reviewRecRef.current) {
++        try { reviewRecRef.current.abort(); } catch { /* noop */ }
++        reviewRecRef.current = null;
++      }
++    };
++  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+ 
+-  if (!currentQuestion) return null;
++  if (!show || !currentQuestion) return null;
+ 
+   return (
+     <div style={{
+@@ -83,97 +284,108 @@ const AnswerPlayback = ({ questions, answers, onEdit, onComplete, examType, spea
+       zIndex: 9998,
+       display: 'flex',
+       flexDirection: 'column',
+-      fontFamily: "'Sora', sans-serif"
++      fontFamily: "'Sora', sans-serif",
+     }}>
+-      {/* Header */}
+       <div style={{
+         background: 'var(--surface)',
+         padding: '20px',
+         borderBottom: '2px solid var(--yellow)',
+-        textAlign: 'center'
++        textAlign: 'center',
+       }}>
+         <h1 style={{
+           color: 'var(--yellow)',
+           fontSize: '1.1rem',
+           fontWeight: 800,
+           margin: 0,
+-          marginBottom: '8px'
++          marginBottom: '10px',
+         }}>
+           Answer Playback
+         </h1>
+         <div style={{
+           color: 'var(--muted)',
+-          fontSize: '0.9rem'
++          fontSize: '0.9rem',
+         }}>
+-          Reviewing {playbackIndex + 1} of {questions.length} answers
++          Reviewing answer {current} of {total}
+         </div>
+       </div>
+ 
+-      {/* Progress Bar */}
+       <div style={{
+         height: '4px',
+         background: 'var(--border)',
+-        position: 'relative'
++        position: 'relative',
+       }}>
+         <div style={{
+           height: '100%',
+           background: 'var(--yellow)',
+-          width: `${((playbackIndex + 1) / questions.length) * 100}%`,
+-          transition: 'width 0.3s ease'
++          width: `${pct}%`,
++          transition: 'width 0.3s ease',
+         }} />
+       </div>
+ 
+-      {/* Content */}
+       <div style={{
+         flex: 1,
+         display: 'flex',
+         alignItems: 'center',
+         justifyContent: 'center',
+-        padding: '20px'
++        padding: '20px',
+       }}>
+         <div style={{
+           background: 'var(--surface)',
+           border: '2px solid var(--yellow)',
+           borderRadius: '12px',
+           padding: '32px',
+-          maxWidth: '600px',
+-          width: '100%'
++          maxWidth: '700px',
++          width: '100%',
+         }}>
+-          {/* Question */}
+-          <div style={{
+-            marginBottom: '24px'
+-          }}>
++          <div style={{ marginBottom: '24px' }}>
+             <div style={{
+               color: 'var(--yellow)',
+               fontSize: '0.9rem',
+               fontWeight: 600,
+-              marginBottom: '12px'
++              marginBottom: '12px',
+             }}>
+-              Question {playbackIndex + 1}
++              Question {current}
+             </div>
+             <div style={{
+               color: 'var(--text)',
+               fontSize: '1rem',
+-              lineHeight: 1.5
++              lineHeight: 1.5,
+             }}>
+               {currentQuestion.text}
+             </div>
+           </div>
+ 
+-          {/* Answer */}
++          {!currentRawAnswer && (
++            <div style={{
++              display: 'flex',
++              alignItems: 'center',
++              gap: '8px',
++              background: 'var(--warn-bg, rgba(255,180,0,0.1))',
++              border: '1px solid var(--warn, #f5a623)',
++              borderRadius: '8px',
++              padding: '10px 14px',
++              marginBottom: '16px',
++              color: 'var(--warn, #f5a623)',
++              fontSize: '0.95rem',
++              fontWeight: 600,
++            }}>
++              ΓÜá∩╕Å No answer recorded
++            </div>
++          )}
++
+           <div style={{
+             background: 'var(--bg)',
+             border: '1px solid var(--yellow)',
+             borderRadius: '8px',
+             padding: '16px',
+-            marginBottom: '16px'
++            marginBottom: '16px',
+           }}>
+             <div style={{
+               color: 'var(--muted)',
+               fontSize: '0.8rem',
+               marginBottom: '8px',
+               textTransform: 'uppercase',
+-              letterSpacing: '1px'
++              letterSpacing: '1px',
+             }}>
+               Your Answer
+             </div>
+@@ -181,69 +393,127 @@ const AnswerPlayback = ({ questions, answers, onEdit, onComplete, examType, spea
+               color: 'var(--yellow)',
+               fontSize: '0.95rem',
+               fontStyle: 'italic',
+-              lineHeight: 1.4
++              lineHeight: 1.4,
+             }}>
+               {currentAnswer}
+             </div>
+           </div>
+ 
+-          {/* Action Buttons */}
+-          <div style={{
+-            display: 'flex',
+-            gap: '12px',
+-            justifyContent: 'center',
+-            marginBottom: '20px'
+-          }}>
++          {changingAnswer && (
++            <div style={{
++              textAlign: 'center',
++              padding: '16px',
++              color: 'var(--yellow)',
++              fontSize: '1rem',
++              fontWeight: 600,
++              background: 'var(--surface)',
++              border: '2px solid var(--yellow)',
++              borderRadius: '8px',
++              marginBottom: '16px',
++            }}>
++              ≡ƒÄñ Listening for your new answer...
++            </div>
++          )}
++
++          {!changingAnswer && (
++            <div style={{
++              display: 'flex',
++              gap: '12px',
++              justifyContent: 'center',
++              marginBottom: '20px',
++              flexWrap: 'wrap',
++            }}>
+             <button
+               onClick={handleChange}
+               className="exam-focus"
++              aria-label="Change answer"
+               style={{
+                 padding: '12px 24px',
+-                border: '2px solid var(--red)',
++                border: '2px solid var(--red, #e74c3c)',
+                 borderRadius: '8px',
+                 background: 'transparent',
+-                color: 'var(--red)',
++                color: 'var(--red, #e74c3c)',
+                 fontSize: '0.9rem',
+                 fontWeight: 600,
+                 cursor: 'pointer',
+-                fontFamily: "'Sora', sans-serif"
++                fontFamily: "'Sora', sans-serif",
+               }}
+             >
+               ΓåÉ Change Answer
+             </button>
+ 
++            <button
++              onClick={handlePrev}
++              className="exam-focus"
++              aria-label="Go to previous answer"
++              style={{
++                padding: '12px 24px',
++                border: '2px solid var(--yellow)',
++                borderRadius: '8px',
++                background: 'transparent',
++                color: 'var(--yellow)',
++                fontSize: '0.9rem',
++                fontWeight: 600,
++                cursor: 'pointer',
++                fontFamily: "'Sora', sans-serif",
++              }}
++            >
++              ΓåÉ Previous
++            </button>
++
+             <button
+               onClick={handleNext}
+               className="exam-focus"
++              aria-label="Keep and go to next answer"
+               style={{
+                 padding: '12px 24px',
+                 border: '2px solid var(--yellow)',
+                 borderRadius: '8px',
+                 background: 'var(--yellow)',
+-                color: 'var(--black)',
++                color: 'var(--black, #000)',
+                 fontSize: '0.9rem',
+                 fontWeight: 600,
+                 cursor: 'pointer',
+-                fontFamily: "'Sora', sans-serif"
++                fontFamily: "'Sora', sans-serif",
+               }}
+             >
+-              Keep & Next ΓåÆ
++              Keep &amp; Next ΓåÆ
+             </button>
+-          </div>
+ 
+-          {/* Voice Commands */}
++            <button
++              onClick={handleSkipAll}
++              className="exam-focus"
++              aria-label="Skip all and submit"
++              style={{
++                padding: '12px 24px',
++                border: '2px solid var(--muted, #888)',
++                borderRadius: '8px',
++                background: 'transparent',
++                color: 'var(--muted, #888)',
++                fontSize: '0.9rem',
++                fontWeight: 600,
++                cursor: 'pointer',
++                fontFamily: "'Sora', sans-serif",
++              }}
++            >
++              Skip All ΓåÆ Submit
++            </button>
++            </div>
++          )}
++
+           <div style={{
+             textAlign: 'center',
+-            fontSize: '0.85rem',
++            fontSize: '0.82rem',
+             color: 'var(--muted)',
+-            fontFamily: "'JetBrains Mono', monospace"
++            fontFamily: "'JetBrains Mono', monospace",
++            lineHeight: 1.6,
+           }}>
+-            ≡ƒÄñ Say 'change' to edit, 'next' to keep, 'repeat' to hear again, or 'skip all' to submit
++            <div>≡ƒÄñ Say 'change', 'next', 'previous', 'repeat', or 'skip all'</div>
++            <div>Γî¿∩╕Å ΓåÉ / P ┬╖ ΓåÆ / N ┬╖ R ┬╖ Esc</div>
+           </div>
+         </div>
+       </div>
+ 
+-      {/* Reading Indicator */}
+       {isReading && (
+         <div style={{
+           position: 'absolute',
+@@ -257,13 +527,13 @@ const AnswerPlayback = ({ questions, answers, onEdit, onComplete, examType, spea
+           border: '1px solid var(--yellow)',
+           borderRadius: '6px',
+           fontSize: '0.8rem',
+-          color: 'var(--yellow)'
++          color: 'var(--yellow)',
+         }}>
+           ≡ƒöè Reading...
+         </div>
+       )}
+     </div>
+   );
+-};
++}));
+ 
+ export default AnswerPlayback;

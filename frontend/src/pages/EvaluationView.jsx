@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import { useAuth } from '../context/AuthContext';
+import usePageTitle from '../hooks/usePageTitle';
 
 import { fetchEvaluationData, submitGrades, computeTotalScore } from './evaluationApi';
 import QuestionPanel from './QuestionPanel';
@@ -49,9 +50,10 @@ function useEvaluationData(id, isReady) {
 // ── Main component (coordinator only) ────────────────────────────────────────
 
 export default function EvaluationView() {
+    usePageTitle('Grading');
     const { user, initializing } = useAuth();
     const { id } = useParams();
-    const navigate = useNavigate();
+    const [saveStatus, setSaveStatus] = useState(null); // 'success' | 'error' | null
 
     const isAuthorized = Boolean(user && (user.role === 'teacher' || user.role === 'admin'));
 
@@ -62,16 +64,16 @@ export default function EvaluationView() {
     const handleSubmit = useCallback(async () => {
         try {
             await submitGrades(id, grades, feedback);
-            alert('Grading saved successfully!');
-            navigate('/teacher');
+            setSaveStatus('success');
+            setTimeout(() => setSaveStatus(null), 3000);
         } catch {
-            alert('Failed to save grades.');
+            setSaveStatus('error');
         }
-    }, [id, grades, feedback, navigate]);
+    }, [id, grades, feedback]);
 
     // ── Render guards ────────────────────────────────────────────────────
 
-    if (initializing) return <div className="p-8" style={{ background: 'var(--bg)', color: 'var(--text)' }}>Loading...</div>;
+    if (initializing) return <div role="status" aria-live="polite" className="p-8" style={{ background: 'var(--bg)', color: 'var(--text)' }}>Loading...</div>;
 
     if (!isAuthorized) {
         return (
@@ -81,7 +83,7 @@ export default function EvaluationView() {
         );
     }
 
-    if (loading) return <div className="p-8" style={{ background: 'var(--bg)', color: 'var(--text)' }}>Loading evaluation…</div>;
+    if (loading) return <div role="status" aria-live="polite" className="p-8" style={{ background: 'var(--bg)', color: 'var(--text)' }}>Loading evaluation…</div>;
     if (error || !submission || !exam) return <div className="p-8" style={{ background: 'var(--bg)', color: 'var(--text)' }}>Error loading evaluation data.</div>;
 
     // Filter questions without _id — they can't be used for answer/grade lookups
@@ -116,6 +118,7 @@ export default function EvaluationView() {
                     onFeedbackChange={setFeedback}
                     totalScore={totalScore}
                     onSubmit={handleSubmit}
+                    saveStatus={saveStatus}
                 />
             </div>
         </div>

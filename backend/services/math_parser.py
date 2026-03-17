@@ -9,6 +9,15 @@ import re
 from sympy import sympify, solve, Symbol, SympifyError
 
 
+# ── Security: allowlist guard ──────────────────────────────────────────────────
+# Only permit characters that are valid in mathematical expressions.
+# This blocks Python eval injection via __import__, os.system, etc.
+_SAFE_EXPR_RE = re.compile(r'^[\w\s\+\-\*\/\^\(\)\.\,\=\<\>\!]+$')
+
+# Maximum length to prevent DoS via huge symbolic expressions
+_MAX_EXPR_LEN = 500
+
+
 class MathParser:
     def __init__(self):
         # ✅ Multi-char operators listed first so they match before
@@ -36,7 +45,19 @@ class MathParser:
         - Pure numeric expressions (e.g. "2+3") → evaluated to a float.
         - Symbolic expressions with variables (e.g. "x**2 - 4") → solved
           algebraically and solutions returned as strings.
+
+        Returns a dict with result fields, or {"error": "..."} on failure.
         """
+        # ── Security guard: validate before passing to sympify/eval ───────────
+        if not expression:
+            return {"error": "No expression provided"}
+
+        if len(expression) > _MAX_EXPR_LEN:
+            return {"error": "Expression too long"}
+
+        if not _SAFE_EXPR_RE.match(expression):
+            return {"error": "Expression contains invalid characters"}
+
         try:
             expr = sympify(expression)
 

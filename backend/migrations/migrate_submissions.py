@@ -73,13 +73,12 @@ def _convert_flat_to_array(answers_dict, audio_files_dict=None):
     Returns:
         list of structured answer dicts.
     """
-    audio = audio_files_dict or {}
     result = []
     for q_id, text in answers_dict.items():
         result.append({
             "question_id": q_id,
             "text": text or "",
-            "audio_url": audio.get(q_id),
+            "audio_url": audio_files_dict.get(q_id) if isinstance(audio_files_dict, dict) else None,
             "auto_score": None,
             "teacher_marks": None,
             "flagged_for_review": False,
@@ -113,7 +112,12 @@ def answers_to_lookup(answers):
 # ── CLI entry point ───────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    from config.db import db as _db
+    import os
+    import sys
+    # Add the 'backend' folder to the python path so it can be run standalone
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    from config.db import db as _db  # type: ignore
 
     logging.basicConfig(level=logging.INFO)
     result = migrate_submissions(_db)

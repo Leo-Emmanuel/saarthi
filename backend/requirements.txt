@@ -3,7 +3,6 @@ bcrypt==5.0.0
 blinker==1.9.0
 click==8.3.1
 colorama==0.4.6
-comtypes==1.4.15
 dnspython==2.8.0
 Flask==3.1.2
 flask-cors==6.0.2
@@ -17,16 +16,12 @@ nltk==3.9.2
 passlib==1.7.4
 PyJWT==2.11.0
 pymongo==4.16.0
-pypiwin32==223
 python-dotenv==1.2.1
 python-docx==1.1.0
-pyttsx3==2.99
-pywin32==311
+edge-tts==6.1.12
 regex==2026.1.15
 reportlab==4.1.0
 SpeechRecognition==3.14.5
-standard-aifc==3.13.0
-standard-chunk==3.13.0
 sympy==1.14.0
 tqdm==4.67.3
 typing_extensions==4.15.0
@@ -35,3 +30,7 @@ pypdf==4.0.1
 pydub==0.25.1
 marshmallow>=3.20.0
 flask-limiter>=3.5.0
+flask-socketio==5.3.6
+python-socketio==4.11.0
+python-engineio==4.8.0
+gunicorn==21.2.0

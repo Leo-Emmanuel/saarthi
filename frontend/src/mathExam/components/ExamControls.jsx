@@ -3,7 +3,7 @@
  * Card-based panel with exam actions — all voice-triggerable.
  */
 
-import { useDispatch, useSelector } from 'react-redux';
+import { useSelector } from 'react-redux';
 import { motion } from 'framer-motion';
 
 const ControlCard = ({ icon, label, description, onClick, danger = false, disabled = false, voiceHint }) => (

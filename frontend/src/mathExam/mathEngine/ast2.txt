@@ -1,0 +1,4 @@
+{
+  "type": "Symbol",
+  "name": "x squared + 2x - 3"
+}

@@ -1,0 +1,37 @@
+{
+  "type": "Add",
+  "terms": [
+    {
+      "type": "Power",
+      "base": {
+        "type": "Symbol",
+        "name": "x"
+      },
+      "exponent": {
+        "type": "Number",
+        "value": "2"
+      }
+    },
+    {
+      "type": "Subtract",
+      "left": {
+        "type": "Multiply",
+        "factors": [
+          {
+            "type": "Number",
+            "value": "2"
+          },
+          {
+            "type": "Symbol",
+            "name": "x"
+          }
+        ]
+      },
+      "right": {
+        "type": "Number",
+        "value": "3"
+      }
+    }
+  ]
+}
+Latex: {x}^{2} + 2 \cdot x - 3

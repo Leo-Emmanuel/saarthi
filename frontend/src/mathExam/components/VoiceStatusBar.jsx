@@ -28,18 +28,6 @@ const MicIcon = ({ isListening, isProcessing }) => (
     </div>
 );
 
-const ModeChip = ({ mode }) => (
-    <span
-        className="px-3 py-1 rounded-full text-xs font-bold tracking-wide uppercase"
-        style={{
-            background: mode === 'command' ? 'var(--accent2)' : 'var(--success)',
-            color: 'var(--bg)',
-        }}
-    >
-        {mode === 'command' ? 'Command Mode' : 'Dictation Mode'}
-    </span>
-);
-
 const VerbosityChip = ({ mode }) => (
     <span
         className="px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wide"
@@ -56,7 +44,6 @@ const VoiceStatusBar = () => {
     const {
         isListening,
         isProcessing,
-        inputMode,
         verbosityMode,
         lastSpokenCommand,
         lastAudioFeedback,
@@ -121,9 +108,12 @@ const VoiceStatusBar = () => {
                 </div>
 
                 <div className="flex items-center gap-2 flex-shrink-0">
-                    <ModeChip mode={inputMode} />
                     <VerbosityChip mode={verbosityMode} />
                 </div>
+
+                <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+                    Say "command [action]" or use core commands directly
+                </span>
 
                 {/* Key shortcut hint */}
                 <div className="hidden md:flex items-center gap-1 text-xs" style={{ color: 'var(--muted)' }}>

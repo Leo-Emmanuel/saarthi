@@ -11,8 +11,8 @@ import MathRenderer from './MathRenderer.jsx';
 
 const StepHistory = ({ onEditStep, onReadStep }) => {
     const dispatch = useDispatch();
-    const { steps, currentStepIndex, inputMode } = useSelector(s => s.mathExam);
-    const isExamMode = useSelector(s => s.examSession.isExamMode);
+    const { steps = [], currentStepIndex = 0, inputMode } = useSelector(s => s.mathExam?.present ?? s.mathExam ?? {});
+    const isExamMode = useSelector(s => s.examSession?.isExamMode ?? false);
 
     const handleEdit = (idx) => {
         dispatch(setCurrentStep(idx));

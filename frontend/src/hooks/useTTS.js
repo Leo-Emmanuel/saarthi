@@ -79,6 +79,7 @@ export function useTTS(ttsSettings = { rate: 1.0, pitch: 1.0, voice: null }) {
   const speak = useCallback((text, options = {}) => {
     if (!voicesLoadedRef.current) {
       console.warn('TTS voices not loaded yet');
+      options.onEnd?.();
       return;
     }
 

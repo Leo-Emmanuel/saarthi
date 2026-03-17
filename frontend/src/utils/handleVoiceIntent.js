@@ -11,6 +11,7 @@ import { VOICE_INTENT, parseVoiceCommand } from './voiceCommands';
  */
 export function handleVoiceIntent({
     transcriptRaw,
+    recognitionConfidence,
     localGrammarMode,
     startedQuestionType,
     startedQuestionId,
@@ -23,7 +24,12 @@ export function handleVoiceIntent({
 }) {
     const cbs = callbacksRef.current;
 
-    const { intent, payload } = parseVoiceCommand(transcriptRaw, localGrammarMode, startedQuestionType);
+    const { intent, payload } = parseVoiceCommand(
+        transcriptRaw,
+        localGrammarMode,
+        startedQuestionType,
+        recognitionConfidence,
+    );
 
     switch (intent) {
         case VOICE_INTENT.HELP:
@@ -33,15 +39,18 @@ export function handleVoiceIntent({
             break;
 
         case VOICE_INTENT.TIME_REMAINING:
+            stopListening();
             if (cbs.onTimeRemaining) cbs.onTimeRemaining(secondsLeftRef.current);
             break;
 
         case VOICE_INTENT.READ_OPTIONS:
+            stopListening();
             cbs.onReadOptions?.(q);
             break;
 
         case VOICE_INTENT.REVIEW:
             stopListening();
+            console.log('[VoiceController] REVIEW intent fired');
             cbs.onReview?.();
             break;
 
@@ -59,6 +68,12 @@ export function handleVoiceIntent({
             cbs.onNext?.();
             break;
 
+        case VOICE_INTENT.SKIP:
+            stopListening();
+            if (cbs.onSkip) cbs.onSkip();
+            else cbs.onNext?.();
+            break;
+
         case VOICE_INTENT.PREVIOUS:
             stopListening();
             cbs.onPrev?.();
@@ -74,6 +89,7 @@ export function handleVoiceIntent({
             break;
 
         case VOICE_INTENT.REPEAT:
+            stopListening();
             cbs.onRepeat?.(q, indexRef.current, total);
             break;
 
@@ -87,6 +103,7 @@ export function handleVoiceIntent({
         // ── Written/voice question commands ─────────────────────────────────
         case VOICE_INTENT.READ_ANSWER:
             // Read back the student's current answer via TTS
+            stopListening();
             cbs.onReadAnswer?.(startedQuestionId, q);
             break;
 
@@ -105,7 +122,23 @@ export function handleVoiceIntent({
             cbs.onUndo?.(startedQuestionId);
             break;
 
+        case VOICE_INTENT.UNKNOWN:
         default:
+        {
+            const qCallbacks = callbacksRef.current;
+            const isActiveMCQ =
+                startedQuestionType === 'mcq' ||
+                localGrammarMode === 'strict' ||
+                localGrammarMode === 'command-prefix';
+
+            if (isActiveMCQ) {
+                qCallbacks.speak?.(
+                    'Sorry, I did not understand that. ' +
+                    'For this question please say Option A, Option B, ' +
+                    'Option C, or Option D.'
+                );
+            }
             break;
+        }
     }
 }

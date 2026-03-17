@@ -8,5 +8,10 @@ export default defineConfig({
     // Always rebuild the dep cache on startup to prevent stale 504 errors
     force: true,
   },
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: ['./src/test-setup.js'],
+  },
 })
 

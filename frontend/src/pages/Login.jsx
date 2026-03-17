@@ -3,19 +3,33 @@ import { useAuth } from '../context/AuthContext';
 import { getPathForRole } from '../context/routePolicy';
 import { Link, useNavigate } from 'react-router-dom';
 import useTTS from '../hooks/useTTS';
+import usePageTitle from '../hooks/usePageTitle';
 
 export default function Login() {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
+    const [emailError, setEmailError] = useState('');
+    const [passwordError, setPasswordError] = useState('');
     const { login } = useAuth();
     const navigate = useNavigate();
     const { initUnlock } = useTTS();
+    usePageTitle('Login');
 
     const handleSubmit = async (e) => {
         e.preventDefault();
         initUnlock(); // Unlock global TTS context unconditionally on user click
         setError('');
+
+        const trimmedEmail = email.trim();
+        const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail);
+        const passwordOk = password.trim().length > 0;
+
+        setEmailError(emailOk ? '' : 'Invalid email address');
+        setPasswordError(passwordOk ? '' : 'Password is required');
+
+        if (!emailOk || !passwordOk) return;
+
         const res = await login(email, password);
         if (res.success) {
             navigate(getPathForRole(res.role));
@@ -61,14 +75,16 @@ export default function Login() {
                 )}
                 <form onSubmit={handleSubmit} className="space-y-4">
                     <div>
-                        <label htmlFor="email" className="block mb-1" style={{ color: 'var(--muted)', fontSize: 14 }}>
+                        <label htmlFor="email-input" className="block mb-1" style={{ color: 'var(--muted)', fontSize: 14 }}>
                             Email
                         </label>
                         <input
                             type="email"
-                            id="email"
+                            id="email-input"
                             name="email"
                             autoComplete="username"
+                            aria-describedby={emailError ? 'email-error' : undefined}
+                            aria-invalid={!!emailError}
                             className="w-full"
                             style={{
                                 padding: 10,
@@ -79,19 +95,29 @@ export default function Login() {
                                 outline: 'none',
                             }}
                             value={email}
-                            onChange={(e) => setEmail(e.target.value)}
+                            onChange={(e) => {
+                                setEmail(e.target.value);
+                                if (emailError) setEmailError('');
+                            }}
                             required
                         />
+                        {emailError && (
+                            <p id="email-error" role="alert" style={{ color: 'var(--danger)', fontSize: 13, marginTop: 6 }}>
+                                {emailError}
+                            </p>
+                        )}
                     </div>
                     <div>
-                        <label htmlFor="password" className="block mb-1" style={{ color: 'var(--muted)', fontSize: 14 }}>
+                        <label htmlFor="password-input" className="block mb-1" style={{ color: 'var(--muted)', fontSize: 14 }}>
                             Password
                         </label>
                         <input
                             type="password"
-                            id="password"
+                            id="password-input"
                             name="password"
                             autoComplete="current-password"
+                            aria-describedby={passwordError ? 'password-error' : undefined}
+                            aria-invalid={!!passwordError}
                             className="w-full"
                             style={{
                                 padding: 10,
@@ -102,9 +128,17 @@ export default function Login() {
                                 outline: 'none',
                             }}
                             value={password}
-                            onChange={(e) => setPassword(e.target.value)}
+                            onChange={(e) => {
+                                setPassword(e.target.value);
+                                if (passwordError) setPasswordError('');
+                            }}
                             required
                         />
+                        {passwordError && (
+                            <p id="password-error" role="alert" style={{ color: 'var(--danger)', fontSize: 13, marginTop: 6 }}>
+                                {passwordError}
+                            </p>
+                        )}
                     </div>
                     <button
                         type="submit"
@@ -123,12 +157,6 @@ export default function Login() {
                     </button>
                 </form>
                 <div className="mt-4 text-center">
-                    <p style={{ color: 'var(--muted)', fontSize: 14 }}>
-                        Don't have an account?{' '}
-                        <Link to="/register" style={{ color: 'var(--accent)' }}>
-                            Register
-                        </Link>
-                    </p>
                     <div className="mt-2 border-t pt-2">
                         <Link
                             to="/voice-login"

@@ -11,7 +11,7 @@ import logging
 import os
 import threading
 from bson import ObjectId
-from datetime import datetime
+from datetime import datetime, timezone
 from flask import Blueprint, jsonify, request, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from werkzeug.utils import secure_filename
@@ -113,14 +113,14 @@ def _is_mcq_like(q) -> bool:
 
 
 def _is_writing_like(q) -> bool:
-    """Return True if a question expects a written / voice answer."""
+    """Return True if a question expects a written answer."""
     if hasattr(q, "type"):
         q_type = getattr(q, "type", None)
     elif isinstance(q, dict):
         q_type = q.get("type")
     else:
         q_type = None
-    return q_type in ("text", "voice")
+    return q_type == "text"
 
 
 def _detect_exam_type(questions):
@@ -131,8 +131,6 @@ def _detect_exam_type(questions):
     has_mcq = any(_is_mcq_like(q) for q in questions)
     has_writing = any(_is_writing_like(q) for q in questions)
 
-    print(f"DEBUG: _detect_exam_type has_mcq={has_mcq}, has_writing={has_writing}")
-
     if has_mcq and not has_writing:
         return "mcq-only"
     if not has_mcq and has_writing:
@@ -140,21 +138,6 @@ def _detect_exam_type(questions):
     if has_mcq and has_writing:
         return "mixed"
     return "unknown"
-
-
-def _parse_questions_from_data(raw_questions):
-    """Build Question objects from request data."""
-    questions = []
-    for q in (raw_questions or []):
-        questions.append(Question(
-            text=q.get("text", ""),
-            q_type=q.get("type", "text"),
-            options=q.get("options", []),
-            correct_answer=q.get("correct_answer"),
-            marks=q.get("marks", 1),
-            grading_config=q.get("grading_config"),
-        ))
-    return questions
 
 
 def _parse_questions_from_file(file_url):
@@ -189,17 +172,8 @@ def _compute_exam_type(questions: list) -> str:
     if not questions:
         return "empty"
 
-    print(f"DEBUG: Computing exam type for {len(questions)} questions")
-    for i, q in enumerate(questions):
-        if isinstance(q, dict):
-            print(f"DEBUG: Question {i}: type={q.get('type')}, options_len={len(q.get('options') or [])}")
-        else:
-            print(f"DEBUG: Question {i}: obj_type={getattr(q, 'type', None)}, has_options={bool(getattr(q, 'options', None))}")
-
     has_mcq = any(_is_mcq_like(q) for q in questions)
     has_writing = any(_is_writing_like(q) for q in questions)
-
-    print(f"DEBUG: has_mcq={has_mcq}, has_writing={has_writing}")
 
     if has_mcq and not has_writing:
         return "mcq-only"
@@ -209,6 +183,31 @@ def _compute_exam_type(questions: list) -> str:
         return "mixed"
     return "unknown"
 
+
+def _extract_mcq_letter(student_answer):
+    """Extract MCQ letter A-D from natural voice response."""
+    import re
+    if not student_answer:
+        return None
+    text = student_answer.strip().upper()
+    
+    early_match = re.match(r'^\s*\(?([ABCD])[).]?\s+', text)
+    if early_match:
+        return early_match.group(1)
+        
+    patterns = [
+        r'\b(?:OPTION|ANSWER|LETTER|CHOICE)\s+([A-D])\b',
+        r'\b([A-D])\s+IS\s+(?:CORRECT|RIGHT)\b',
+        r'\bI\s+(?:THINK|CHOOSE|PICK|SAY)\s+([A-D])\b',
+        r"(?:IT'?S|ITS)\s+([A-D])\b",
+        r'\b([A-D])[)\.]?\s*$',
+        r'^\s*([A-D])[)\.]?\s*$',
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, text)
+        if m:
+            return m.group(1)
+    return None
 
 def _normalize_mcq(s: str) -> str:
     """Reduce an MCQ answer to a single uppercase letter.
@@ -270,6 +269,7 @@ def _grade_answers(questions, answers_raw):
 
         correct = str(q.get("correct_answer", "")).strip()
         student = str(answers.get(q_id, "")).strip()
+        print(f"[GRADE DEBUG] q_id={q_id} student='{student}' correct='{correct}' type={q_type}")
 
         if not correct or not student:
             continue
@@ -284,7 +284,9 @@ def _grade_answers(questions, answers_raw):
 
         # ── MCQ: normalised single-letter comparison ──────────────────────
         if q_type == "mcq":
-            if _normalize_mcq(student) == _normalize_mcq(correct):
+            extracted = _extract_mcq_letter(student)
+            norm_correct = _normalize_mcq(correct)
+            if extracted == norm_correct:
                 score += marks
             continue
 
@@ -326,7 +328,7 @@ def _generate_submission_pdf(user_doc, exam_doc, exam_id, answers_raw, score, to
         pdf_data = {
             "student_name": student_name,
             "exam_title": exam_title,
-            "date": datetime.utcnow().strftime("%Y-%m-%d"),
+            "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             "answers": answers,
             "score": f"{score} / {total_marks}",
         }
@@ -361,11 +363,13 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
                     user_doc, exam_doc, str(exam_oid), answers_raw, score, total_marks,
                 )
 
+            print(f"[GRADE DEBUG] FINAL score={score} total_marks={total_marks}")
+
             _submissions.update_one(
                 {"exam_id": exam_oid, "user_id": user_oid},
                 {"$set": {
                     "status": "graded",
-                    "submitted_at": datetime.utcnow(),
+                    "submitted_at": datetime.now(timezone.utc),
                     "score": score,
                     "total_marks": total_marks,
                     **({} if pdf_url is None else {"pdf_url": pdf_url}),
@@ -389,13 +393,30 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
 def upload_file():
     """Upload a question paper (PDF/DOCX)."""
     if "file" not in request.files:
-        return jsonify({"error": "No file part"}), 400
+        return jsonify({
+            "error": "Validation failed",
+            "fields": {
+                "file": "No file part",
+            },
+        }), 400
     file = request.files["file"]
     if file.filename == "":
-        return jsonify({"error": "No selected file"}), 400
+        return jsonify({
+            "error": "Validation failed",
+            "fields": {
+                "file": "No selected file",
+            },
+        }), 400
 
     try:
         file_url = UploadService.save_file(file, folder="question_papers")
+        if not file_url:
+            return jsonify({
+                "error": "Validation failed",
+                "fields": {
+                    "file": "File upload failed or invalid file type",
+                },
+            }), 400
         return jsonify({"file_url": file_url})
     except Exception:
         _log.exception("File upload failed")
@@ -415,7 +436,14 @@ def create_exam():
         _log.info(f"Request data: {data}")
 
         # Build questions from request data or parse from file
-        questions_list = _parse_questions_from_data(data.get("questions"))
+        questions_list = data.get("questions") or []
+        if isinstance(questions_list, list):
+            for q in questions_list:
+                if isinstance(q, dict) and "correct_answer" not in q:
+                    for key in ("correctAnswer", "answer", "solution"):
+                        if key in q:
+                            q["correct_answer"] = q[key]
+                            break
         file_url = data.get("file_url") or data.get("file_path")
         _log.info(f"File URL: {file_url}")
         _log.info(f"Questions from data: {len(questions_list)}")
@@ -440,11 +468,22 @@ def create_exam():
 
         result = _exams.insert_one(exam.to_dict())
         _log.info(f"Exam created successfully: {result.inserted_id}")
-        return jsonify({"message": "Exam created", "exam_id": str(result.inserted_id)}), 201
-    except Exception as e:
-        _log.exception(f"Exam creation failed: {str(e)}")
-        _log.error(f"Error details: {type(e).__name__}: {str(e)}")
-        return jsonify({"error": f"Exam creation failed: {str(e)}"}), 500
+        created_exam = {
+            "_id": str(result.inserted_id),
+            "title": exam.title,
+            "description": exam.description,
+            "duration": exam.duration,
+            "file_url": exam.file_url,
+            "examType": exam.examType,
+        }
+        return jsonify({
+            "message": "Exam created",
+            "exam_id": str(result.inserted_id),
+            "exam": created_exam,
+        }), 201
+    except Exception:
+        _log.exception("Unexpected error in exam route")
+        return jsonify({"error": "An unexpected error occurred"}), 500
 
 
 @exam_bp.route("/", methods=["GET"])
@@ -601,7 +640,14 @@ def submit_exam(exam_id):
     is_final = data.get("final", False)
     answers_raw = data.get("answers", {})
     audio_files = data.get("audio_files", {})
-    tab_violations = data.get("tab_violations", [])
+    tab_violations = data.get("tab_violations", 0)
+    if isinstance(tab_violations, list):
+        violation_count = len(tab_violations)
+    else:
+        try:
+            violation_count = int(tab_violations)
+        except (TypeError, ValueError):
+            violation_count = 0
 
     # Fix 5: normalize answers to structured array format
     answers = normalize_answers(answers_raw, audio_files)
@@ -615,16 +661,18 @@ def submit_exam(exam_id):
             "user_id": user_oid,
             "answers": answers,
             "audio_files": audio_files,
-            "tab_violations": tab_violations,
-            "flagged": len(tab_violations) >= 3,  # Auto-flag if 3+ violations
-            "last_updated": datetime.utcnow(),
+            "tab_violations": violation_count,
+            "flagged": violation_count >= 3,  # Auto-flag if 3+ violations
+            "last_updated": datetime.now(timezone.utc),
             "status": "submitted" if is_final else "in_progress",
         }
 
         if existing:
             _submissions.update_one({"_id": existing["_id"]}, {"$set": submission_data})
+            submission_id = existing["_id"]
         else:
-            _submissions.insert_one(submission_data)
+            insert_result = _submissions.insert_one(submission_data)
+            submission_id = insert_result.inserted_id
 
         # ── For partial saves, return immediately (no scores) ─────────────
         if not is_final:
@@ -645,6 +693,26 @@ def submit_exam(exam_id):
             daemon=True,
         )
         thread.start()
+
+        try:
+            from app import socketio
+            student_doc = _users.find_one({"_id": user_oid}, {"name": 1, "email": 1, "studentId": 1})
+            exam_doc = _exams.find_one({"_id": exam_oid}, {"title": 1})
+            submitted_at = datetime.now(timezone.utc).isoformat()
+            print("[SOCKET] emitting new_submission")
+            socketio.emit('new_submission', {
+                "_id": str(submission_id),
+                "examId": str(exam_oid),
+                "examTitle": exam_doc.get("title", "") if exam_doc else "",
+                "studentName": student_doc.get("name", "Unknown") if student_doc else "Unknown",
+                "studentEmail": (student_doc.get("email") or student_doc.get("studentId")) if student_doc else "Unknown",
+                "studentId": student_doc.get("studentId", "") if student_doc else "",
+                "submittedAt": submitted_at,
+                "score": 0,
+                "status": "grading",
+            }, room='teachers')
+        except Exception:
+            _log.exception("Failed to emit submission socket event")
 
         return jsonify({"message": "Exam submitted — grading in progress", "status": "grading"}), 202
 

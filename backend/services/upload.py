@@ -12,6 +12,7 @@ import logging
 import os
 import tempfile
 import time
+import uuid
 
 from werkzeug.utils import secure_filename
 
@@ -61,10 +62,12 @@ class UploadService:
         Returns:
             URL path (e.g. ``/static/uploads/file.pdf``) or *None* on failure.
         """
-        filename = _validate_filename(file)
-        if filename is None:
+        safe_name = _validate_filename(file)
+        if safe_name is None:
             _log.warning("Upload rejected: empty or invalid filename")
             return None
+        unique_prefix = uuid.uuid4().hex[:8]
+        filename = f"{unique_prefix}_{safe_name}"
 
         exts = allowed_ext or _ALLOWED_DOCUMENT_EXT
         if not _check_extension(filename, exts):
@@ -102,10 +105,12 @@ class UploadService:
         Returns:
             Absolute filesystem path, or *None* on failure.
         """
-        filename = _validate_filename(file)
-        if filename is None:
+        safe_name = _validate_filename(file)
+        if safe_name is None:
             _log.warning("Temp upload rejected: empty or invalid filename")
             return None
+        unique_prefix = uuid.uuid4().hex[:8]
+        filename = f"{unique_prefix}_{safe_name}"
 
         exts = allowed_ext or _ALLOWED_AUDIO_EXT
         if not _check_extension(filename, exts):

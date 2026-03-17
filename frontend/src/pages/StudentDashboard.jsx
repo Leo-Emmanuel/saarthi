@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../config/axios';
-import Navbar from '../components/Navbar';
 import useExamVoiceGuidance from '../hooks/useExamVoiceGuidance';
 import StudentDashboardHeader from '../components/StudentDashboardHeader';
 import StudentExamCard from '../components/StudentExamCard';
@@ -59,7 +58,6 @@ export default function StudentDashboard() {
             className="min-h-screen"
             style={{ background: 'var(--bg)', color: 'var(--text)' }}
         >
-            <Navbar />
             <div className="max-w-4xl mx-auto p-6">
                 <StudentDashboardHeader
                     onStartVoiceGuidance={() => {

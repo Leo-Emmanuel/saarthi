@@ -1,5 +1,5 @@
 from bson import ObjectId
-from datetime import datetime
+from datetime import datetime, timezone
 
 class Submission:
     def __init__(self, exam_id, user_id, answers, audio_files=None):
@@ -7,7 +7,7 @@ class Submission:
         self.user_id = ObjectId(user_id)
         self.answers = answers # Dictionary {question_id: answer_text}
         self.audio_files = audio_files or {} # Dictionary {question_id: audio_url}
-        self.submitted_at = datetime.utcnow()
+        self.submitted_at = datetime.now(timezone.utc)
         self.grades = {} # Dictionary {question_id: marks}
         self.total_marks = 0
         self.is_graded = False

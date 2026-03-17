@@ -13,7 +13,7 @@ export async function fetchEvaluationData(submissionId) {
         Object.entries(subData.grades || {}).map(([k, v]) => [k, Number(v) || 0]),
     );
 
-    const examRes = await api.get(`/exam/${subData.exam_id}`);
+    const examRes = await api.get(`/evaluation/exams/${subData.exam_id}`);
 
     return {
         submission: subData,

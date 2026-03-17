@@ -7,13 +7,16 @@ export function useTabDetection({ onViolation, maxViolations = 3, speak }) {
   const isSpeaking = useRef(false);
 
   const handleVisibilityChange = useCallback(() => {
+    console.log('[TabDetect] visibilityState:', document.visibilityState, 'count:', violationCount.current);
     if (document.visibilityState === "hidden") {
       violationCount.current += 1;
+      console.log('[TabDetect] violation count now:', violationCount.current);
       const violation = {
         timestamp: new Date().toISOString(),
         count: violationCount.current,
       };
       violations.current.push(violation);
+      console.log('[TabDetect] calling onViolation, allViolations length:', violations.current.length);
       onViolation?.(violation, violations.current);
 
       // Prepare warning message

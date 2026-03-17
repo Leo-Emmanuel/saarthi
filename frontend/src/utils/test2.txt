@@ -1,0 +1,5 @@
+﻿{
+  latex: 'x^{2} + 2x - 3',
+  display: '$x^{2} + 2x - 3$',
+  hasLatex: true
+}

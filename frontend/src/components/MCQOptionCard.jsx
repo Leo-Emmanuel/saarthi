@@ -55,6 +55,8 @@ export default function MCQOptionCard({
                 checked={checked}
                 onChange={onChange}
                 disabled={disabled}
+                role="radio"
+                aria-checked={checked}
                 aria-label={`Option ${letter}: ${text}`}
                 style={{
                     width: 18,

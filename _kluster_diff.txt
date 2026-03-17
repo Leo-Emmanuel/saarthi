@@ -1,0 +1,1445 @@
+﻿diff --git a/frontend/src/components/AnswerPlayback.jsx b/frontend/src/components/AnswerPlayback.jsx
+index fe8243d..148415a 100644
+--- a/frontend/src/components/AnswerPlayback.jsx
++++ b/frontend/src/components/AnswerPlayback.jsx
+@@ -1,76 +1,270 @@
+-import { useState, useEffect, useCallback, useRef } from 'react';
++import {
++  forwardRef,
++  memo,
++  useCallback,
++  useEffect,
++  useImperativeHandle,
++  useRef,
++  useState,
++} from 'react';
+ 
+-const AnswerPlayback = ({ questions, answers, onEdit, onComplete, examType, speak, cancel }) => {
++const AnswerPlayback = memo(forwardRef(function AnswerPlayback({
++  show = true,
++  questions = [],
++  answers = {},
++  onEdit,
++  onComplete,
++  onClose,
++  onUpdateAnswer,
++  examType,
++  speak,
++  cancel,
++}, ref) {
+   const [playbackIndex, setPlaybackIndex] = useState(0);
+   const [isReading, setIsReading] = useState(false);
+-  const [reviewed, setReviewed] = useState([]);
++  const [changingAnswer, setChangingAnswer] = useState(false);
++
++  const reviewRecRef = useRef(null);
++  const changingAnswerRef = useRef(false);
++  const handleNextRef = useRef(null);
++  const handlePrevRef = useRef(null);
++  const handleChangeRef = useRef(null);
++  const handleRepeatRef = useRef(null);
++  const handleSkipAllRef = useRef(null);
+ 
+   const currentQuestion = questions[playbackIndex];
+-  const currentQuestionId = currentQuestion?._id?.toString();
+-  const currentAnswer = answers[currentQuestionId] || "No answer given";
++  const currentQuestionId = currentQuestion?._id != null ? String(currentQuestion._id) : '';
++  const currentRawAnswer = answers?.[currentQuestionId] ?? '';
++  const currentAnswer = String(currentRawAnswer || '').trim() || 'No answer given';
++  const total = questions.length;
++  const current = playbackIndex + 1;
++  const pct = total > 0 ? Math.round((current / total) * 100) : 0;
++
++  const handleNext = useCallback(() => {
++    if (changingAnswerRef.current) return;
++    if (playbackIndex >= questions.length - 1) {
++      onComplete?.();
++      return;
++    }
++    setPlaybackIndex(playbackIndex + 1);
++  }, [onComplete, playbackIndex, questions.length]);
++
++  const handlePrev = useCallback(() => {
++    if (changingAnswerRef.current) return;
++    if (playbackIndex > 0) {
++      setPlaybackIndex(playbackIndex - 1);
++    } else {
++      speak?.('This is the first question.');
++    }
++  }, [playbackIndex, speak]);
+ 
+   const readCurrentAnswer = useCallback(() => {
+-    if (!currentQuestion) return;
++    if (!currentQuestion || !speak || changingAnswerRef.current) return undefined;
+ 
+-    const ans = answers[currentQuestionId] || "No answer given";
+-    const text = `Question ${playbackIndex + 1}: ${currentQuestion.text}. Your answer: ${ans}. Say change to edit or next to keep.`;
++    const ans = answers?.[currentQuestionId] || 'No answer given';
++    const text =
++      `Question ${playbackIndex + 1} of ${questions.length}. ` +
++      `${currentQuestion.text}. ` +
++      `Your answer is: ${ans}. ` +
++      'Say next to keep, change to edit, previous to go back, ' +
++      'or repeat to hear again.';
+ 
+     if (cancel) cancel();
+-
+-    // Slight delay to ensure prior cancellation finishes to prevent interruption errors
++    setIsReading(true);
+     const timer = setTimeout(() => {
+-      if (speak) {
+-        speak(text, {
+-          rate: 0.9,
+-          onStart: () => setIsReading(true),
+-          onEnd: () => setIsReading(false),
+-          onError: (e) => console.error('AnswerPlayback TTS error:', e),
+-          onInterrupt: (e) => {
+-            console.log('AnswerPlayback TTS interrupted:', e);
+-            setIsReading(false);
+-          }
+-        });
++      speak(text, {
++        rate: 0.9,
++        onEnd: () => setIsReading(false),
++        onError: () => setIsReading(false),
++      });
++    }, 300);
++    return () => clearTimeout(timer);
++  }, [
++    currentQuestion,
++    currentQuestionId,
++    answers,
++    playbackIndex,
++    questions.length,
++    speak,
++    cancel,
++  ]);
++
++  const startReviewSTT = useCallback(() => {
++    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
++    if (!SR) return;
++
++    if (reviewRecRef.current) {
++      try { reviewRecRef.current.abort(); } catch { /* noop */ }
++    }
++
++    const rec = new SR();
++    rec.continuous = true;
++    rec.interimResults = false;
++    rec.lang = 'en-US';
++    reviewRecRef.current = rec;
++
++    rec.onresult = (event) => {
++      const t = event.results[event.results.length - 1][0]
++        .transcript.toLowerCase().trim();
++      console.log('[Review STT] heard:', t);
++
++      if (t.includes('skip')) handleSkipAllRef.current?.();
++      else if (t.includes('next') || t.includes('keep')) handleNextRef.current?.();
++      else if (t.includes('previous') || t.includes('back')) handlePrevRef.current?.();
++      else if (t.includes('change')) handleChangeRef.current?.();
++      else if (t.includes('repeat')) handleRepeatRef.current?.();
++    };
++
++    rec.onerror = (e) => {
++      if (e.error === 'aborted') return;
++      setTimeout(startReviewSTT, 400);
++    };
++
++    rec.onend = () => {
++      if (!changingAnswerRef.current) {
++        setTimeout(startReviewSTT, 300);
+       }
+-    }, 100);
++    };
+ 
+-    return () => clearTimeout(timer);
+-  }, [currentQuestion, currentQuestionId, answers, playbackIndex, speak, cancel]);
++    try {
++      rec.start();
++      console.log('[Review STT] started');
++    } catch (e) {
++      console.log('[Review STT] start error:', e.message);
++    }
++  }, []);
+ 
+-  useEffect(() => {
+-    const cleanup = readCurrentAnswer();
+-    return cleanup;
+-  }, [readCurrentAnswer]);
++  const startChangeSTT = useCallback(() => {
++    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
++    if (!SR) return;
++
++    const rec = new SR();
++    rec.continuous = false;
++    rec.interimResults = false;
++    rec.lang = 'en-US';
++
++    rec.onresult = (event) => {
++      const transcript = event.results[0][0].transcript.toLowerCase().trim();
++      console.log('[Review Change STT] heard:', transcript);
++
++      let newAnswer = transcript;
++      if (/\boption a\b|^a$/.test(transcript)) newAnswer = 'A';
++      else if (/\boption b\b|^b$/.test(transcript)) newAnswer = 'B';
++      else if (/\boption c\b|^c$/.test(transcript)) newAnswer = 'C';
++      else if (/\boption d\b|^d$/.test(transcript)) newAnswer = 'D';
+ 
+-  const handleNext = () => {
+-    const nextIndex = playbackIndex + 1;
+-    if (nextIndex >= questions.length) {
+-      onComplete();
++      const qId = currentQuestion?._id?.toString?.() || (currentQuestion?._id != null ? String(currentQuestion._id) : '');
++      if (qId && onUpdateAnswer) {
++        onUpdateAnswer(qId, newAnswer);
++      }
++
++      setChangingAnswer(false);
++
++      speak?.(`Answer updated to: ${newAnswer}. Continuing review.`, {
++        rate: 0.9,
++        onEnd: () => {
++          startReviewSTT();
++        },
++      });
++    };
++
++    rec.onerror = (e) => {
++      if (e.error === 'aborted') return;
++      setChangingAnswer(false);
++      speak?.('Could not hear your answer. Please try again.', {
++        onEnd: () => startReviewSTT(),
++      });
++    };
++
++    try {
++      rec.start();
++    } catch (e) {
++      console.error('[Review Change STT] failed to start:', e);
++    }
++  }, [currentQuestion, onUpdateAnswer, speak, startReviewSTT]);
++
++  const handleChange = useCallback(() => {
++    // Backward compatibility for non-review contexts that still depend on onEdit.
++    if (!onUpdateAnswer && onEdit) {
++      onEdit(playbackIndex);
++      return;
++    }
++    if (!currentQuestion || !speak) return;
++    setChangingAnswer(true);
++
++    if (reviewRecRef.current) {
++      try { reviewRecRef.current.abort(); } catch { /* noop */ }
++    }
++
++    const q = currentQuestion;
++    let changeText = `Changing answer for Question ${playbackIndex + 1}. ${q.text}.`;
++    if (q.type === 'mcq' && Array.isArray(q.options) && q.options.length > 0) {
++      const letters = ['A', 'B', 'C', 'D'];
++      const opts = q.options
++        .filter(Boolean)
++        .slice(0, 4)
++        .map((o, i) => `Option ${letters[i]}: ${o}`)
++        .join('. ');
++      changeText += ` ${opts}.`;
++      changeText += ' Please say Option A, Option B, Option C, or Option D.';
+     } else {
+-      setPlaybackIndex(nextIndex);
+-      setReviewed([...reviewed, currentQuestionId]);
++      changeText += ' Please say your new answer now.';
+     }
+-  };
+ 
+-  const handleChange = () => {
+-    onEdit(playbackIndex);
+-  };
++    if (cancel) cancel();
++    speak(changeText, {
++      rate: 0.9,
++      onEnd: () => {
++        startChangeSTT();
++      },
++    });
++  }, [cancel, currentQuestion, onEdit, onUpdateAnswer, playbackIndex, speak, startChangeSTT]);
+ 
+-  const handleRepeat = () => {
++  const handleRepeat = useCallback(() => {
++    if (changingAnswerRef.current) return;
+     readCurrentAnswer();
+-  };
++  }, [readCurrentAnswer]);
+ 
+-  const handleSkipAll = () => {
+-    onComplete();
+-  };
++  const handleSkipAll = useCallback(() => {
++    if (changingAnswerRef.current) return;
++    onComplete?.();
++  }, [onComplete]);
+ 
+-  // Auto-advance when reaching the end
+   useEffect(() => {
+-    if (playbackIndex >= questions.length) {
+-      onComplete();
+-    }
+-  }, [playbackIndex, questions.length, onComplete]);
++    changingAnswerRef.current = changingAnswer;
++  }, [changingAnswer]);
++
++  useEffect(() => {
++    const cleanup = readCurrentAnswer();
++    return cleanup;
++  }, [readCurrentAnswer]);
+ 
+-  if (!currentQuestion) return null;
++  useImperativeHandle(ref, () => ({
++    startReview: () => {
++      console.log('[Review] startReview() called');
++      setPlaybackIndex(0);
++    },
++  }), []);
++
++  useEffect(() => { handleNextRef.current = handleNext; }, [handleNext]);
++  useEffect(() => { handlePrevRef.current = handlePrev; }, [handlePrev]);
++  useEffect(() => { handleChangeRef.current = handleChange; }, [handleChange]);
++  useEffect(() => { handleRepeatRef.current = handleRepeat; }, [handleRepeat]);
++  useEffect(() => { handleSkipAllRef.current = handleSkipAll; }, [handleSkipAll]);
++
++  useEffect(() => {
++    const t = setTimeout(startReviewSTT, 2000);
++    return () => {
++      clearTimeout(t);
++      if (reviewRecRef.current) {
++        try { reviewRecRef.current.abort(); } catch { /* noop */ }
++        reviewRecRef.current = null;
++      }
++      onClose?.();
++    };
++  }, [onClose, startReviewSTT]);
++
++  if (!show || !currentQuestion) return null;
+ 
+   return (
+     <div style={{
+@@ -83,97 +277,108 @@ const AnswerPlayback = ({ questions, answers, onEdit, onComplete, examType, spea
+       zIndex: 9998,
+       display: 'flex',
+       flexDirection: 'column',
+-      fontFamily: "'Sora', sans-serif"
++      fontFamily: "'Sora', sans-serif",
+     }}>
+-      {/* Header */}
+       <div style={{
+         background: 'var(--surface)',
+         padding: '20px',
+         borderBottom: '2px solid var(--yellow)',
+-        textAlign: 'center'
++        textAlign: 'center',
+       }}>
+         <h1 style={{
+           color: 'var(--yellow)',
+           fontSize: '1.1rem',
+           fontWeight: 800,
+           margin: 0,
+-          marginBottom: '8px'
++          marginBottom: '10px',
+         }}>
+           Answer Playback
+         </h1>
+         <div style={{
+           color: 'var(--muted)',
+-          fontSize: '0.9rem'
++          fontSize: '0.9rem',
+         }}>
+-          Reviewing {playbackIndex + 1} of {questions.length} answers
++          Reviewing answer {current} of {total}
+         </div>
+       </div>
+ 
+-      {/* Progress Bar */}
+       <div style={{
+         height: '4px',
+         background: 'var(--border)',
+-        position: 'relative'
++        position: 'relative',
+       }}>
+         <div style={{
+           height: '100%',
+           background: 'var(--yellow)',
+-          width: `${((playbackIndex + 1) / questions.length) * 100}%`,
+-          transition: 'width 0.3s ease'
++          width: `${pct}%`,
++          transition: 'width 0.3s ease',
+         }} />
+       </div>
+ 
+-      {/* Content */}
+       <div style={{
+         flex: 1,
+         display: 'flex',
+         alignItems: 'center',
+         justifyContent: 'center',
+-        padding: '20px'
++        padding: '20px',
+       }}>
+         <div style={{
+           background: 'var(--surface)',
+           border: '2px solid var(--yellow)',
+           borderRadius: '12px',
+           padding: '32px',
+-          maxWidth: '600px',
+-          width: '100%'
++          maxWidth: '700px',
++          width: '100%',
+         }}>
+-          {/* Question */}
+-          <div style={{
+-            marginBottom: '24px'
+-          }}>
++          <div style={{ marginBottom: '24px' }}>
+             <div style={{
+               color: 'var(--yellow)',
+               fontSize: '0.9rem',
+               fontWeight: 600,
+-              marginBottom: '12px'
++              marginBottom: '12px',
+             }}>
+-              Question {playbackIndex + 1}
++              Question {current}
+             </div>
+             <div style={{
+               color: 'var(--text)',
+               fontSize: '1rem',
+-              lineHeight: 1.5
++              lineHeight: 1.5,
+             }}>
+               {currentQuestion.text}
+             </div>
+           </div>
+ 
+-          {/* Answer */}
++          {!currentRawAnswer && (
++            <div style={{
++              display: 'flex',
++              alignItems: 'center',
++              gap: '8px',
++              background: 'var(--warn-bg, rgba(255,180,0,0.1))',
++              border: '1px solid var(--warn, #f5a623)',
++              borderRadius: '8px',
++              padding: '10px 14px',
++              marginBottom: '16px',
++              color: 'var(--warn, #f5a623)',
++              fontSize: '0.95rem',
++              fontWeight: 600,
++            }}>
++              ΓÜá∩╕Å No answer recorded
++            </div>
++          )}
++
+           <div style={{
+             background: 'var(--bg)',
+             border: '1px solid var(--yellow)',
+             borderRadius: '8px',
+             padding: '16px',
+-            marginBottom: '16px'
++            marginBottom: '16px',
+           }}>
+             <div style={{
+               color: 'var(--muted)',
+               fontSize: '0.8rem',
+               marginBottom: '8px',
+               textTransform: 'uppercase',
+-              letterSpacing: '1px'
++              letterSpacing: '1px',
+             }}>
+               Your Answer
+             </div>
+@@ -181,69 +386,127 @@ const AnswerPlayback = ({ questions, answers, onEdit, onComplete, examType, spea
+               color: 'var(--yellow)',
+               fontSize: '0.95rem',
+               fontStyle: 'italic',
+-              lineHeight: 1.4
++              lineHeight: 1.4,
+             }}>
+               {currentAnswer}
+             </div>
+           </div>
+ 
+-          {/* Action Buttons */}
+-          <div style={{
+-            display: 'flex',
+-            gap: '12px',
+-            justifyContent: 'center',
+-            marginBottom: '20px'
+-          }}>
++          {changingAnswer && (
++            <div style={{
++              textAlign: 'center',
++              padding: '16px',
++              color: 'var(--yellow)',
++              fontSize: '1rem',
++              fontWeight: 600,
++              background: 'var(--surface)',
++              border: '2px solid var(--yellow)',
++              borderRadius: '8px',
++              marginBottom: '16px',
++            }}>
++              ≡ƒÄñ Listening for your new answer...
++            </div>
++          )}
++
++          {!changingAnswer && (
++            <div style={{
++              display: 'flex',
++              gap: '12px',
++              justifyContent: 'center',
++              marginBottom: '20px',
++              flexWrap: 'wrap',
++            }}>
+             <button
+               onClick={handleChange}
+               className="exam-focus"
++              aria-label="Change answer"
+               style={{
+                 padding: '12px 24px',
+-                border: '2px solid var(--red)',
++                border: '2px solid var(--red, #e74c3c)',
+                 borderRadius: '8px',
+                 background: 'transparent',
+-                color: 'var(--red)',
++                color: 'var(--red, #e74c3c)',
+                 fontSize: '0.9rem',
+                 fontWeight: 600,
+                 cursor: 'pointer',
+-                fontFamily: "'Sora', sans-serif"
++                fontFamily: "'Sora', sans-serif",
+               }}
+             >
+               ΓåÉ Change Answer
+             </button>
+ 
++            <button
++              onClick={handlePrev}
++              className="exam-focus"
++              aria-label="Go to previous answer"
++              style={{
++                padding: '12px 24px',
++                border: '2px solid var(--yellow)',
++                borderRadius: '8px',
++                background: 'transparent',
++                color: 'var(--yellow)',
++                fontSize: '0.9rem',
++                fontWeight: 600,
++                cursor: 'pointer',
++                fontFamily: "'Sora', sans-serif",
++              }}
++            >
++              ΓåÉ Previous
++            </button>
++
+             <button
+               onClick={handleNext}
+               className="exam-focus"
++              aria-label="Keep and go to next answer"
+               style={{
+                 padding: '12px 24px',
+                 border: '2px solid var(--yellow)',
+                 borderRadius: '8px',
+                 background: 'var(--yellow)',
+-                color: 'var(--black)',
++                color: 'var(--black, #000)',
+                 fontSize: '0.9rem',
+                 fontWeight: 600,
+                 cursor: 'pointer',
+-                fontFamily: "'Sora', sans-serif"
++                fontFamily: "'Sora', sans-serif",
+               }}
+             >
+-              Keep & Next ΓåÆ
++              Keep &amp; Next ΓåÆ
+             </button>
+-          </div>
+ 
+-          {/* Voice Commands */}
++            <button
++              onClick={handleSkipAll}
++              className="exam-focus"
++              aria-label="Skip all and submit"
++              style={{
++                padding: '12px 24px',
++                border: '2px solid var(--muted, #888)',
++                borderRadius: '8px',
++                background: 'transparent',
++                color: 'var(--muted, #888)',
++                fontSize: '0.9rem',
++                fontWeight: 600,
++                cursor: 'pointer',
++                fontFamily: "'Sora', sans-serif",
++              }}
++            >
++              Skip All ΓåÆ Submit
++            </button>
++            </div>
++          )}
++
+           <div style={{
+             textAlign: 'center',
+-            fontSize: '0.85rem',
++            fontSize: '0.82rem',
+             color: 'var(--muted)',
+-            fontFamily: "'JetBrains Mono', monospace"
++            fontFamily: "'JetBrains Mono', monospace",
++            lineHeight: 1.6,
+           }}>
+-            ≡ƒÄñ Say 'change' to edit, 'next' to keep, 'repeat' to hear again, or 'skip all' to submit
++            <div>≡ƒÄñ Say 'change', 'next', 'previous', 'repeat', or 'skip all'</div>
++            <div>Γî¿∩╕Å ΓåÉ / P ┬╖ ΓåÆ / N ┬╖ R ┬╖ Esc</div>
+           </div>
+         </div>
+       </div>
+ 
+-      {/* Reading Indicator */}
+       {isReading && (
+         <div style={{
+           position: 'absolute',
+@@ -257,13 +520,13 @@ const AnswerPlayback = ({ questions, answers, onEdit, onComplete, examType, spea
+           border: '1px solid var(--yellow)',
+           borderRadius: '6px',
+           fontSize: '0.8rem',
+-          color: 'var(--yellow)'
++          color: 'var(--yellow)',
+         }}>
+           ≡ƒöè Reading...
+         </div>
+       )}
+     </div>
+   );
+-};
++}));
+ 
+ export default AnswerPlayback;
+diff --git a/frontend/src/pages/ExamView.jsx b/frontend/src/pages/ExamView.jsx
+index 832ffad..2db3377 100644
+--- a/frontend/src/pages/ExamView.jsx
++++ b/frontend/src/pages/ExamView.jsx
+@@ -11,9 +11,8 @@ import ExamControlsPanel from '../components/ExamControlsPanel';
+ import ExamMainContent from '../components/ExamMainContent';
+ import useExamVoiceController from '../hooks/useExamVoiceController';
+ import useExamTimer from '../hooks/useExamTimer';
+-import useGradingStatusPoll from '../hooks/useGradingStatusPoll';
+ import useTTS from '../hooks/useTTS';
+-import useTabDetection from '../hooks/useTabDetection';
++import useSubmissionStatusPoll from '../hooks/useSubmissionStatusPoll';
+ import {
+     detectExamType,
+     getQuestionCounts,
+@@ -38,9 +37,57 @@ const TRANSITION_CARD_DURATION_MS = 2000;
+ const DRAFT_SAVE_DELAY_MCQ = 1800;
+ const DRAFT_SAVE_DELAY_WRITTEN = 4500;
+ 
+-// Grading status polling
+-const POLL_INTERVAL_MS = 3000;
+-const MAX_POLL_RETRIES = 30; // ~90 seconds before giving up
++function ViolationModal({ onReturn }) {
++    return (
++        <div style={{
++            position: 'fixed',
++            inset: 0,
++            background: 'rgba(0,0,0,0.85)',
++            display: 'flex',
++            alignItems: 'center',
++            justifyContent: 'center',
++            zIndex: 9999,
++        }}>
++            <div style={{
++                background: '#1e2130',
++                border: '2px solid #e74c3c',
++                borderRadius: 16,
++                padding: 40,
++                maxWidth: 440,
++                textAlign: 'center',
++                boxShadow: '0 8px 40px rgba(231,76,60,0.3)',
++            }}>
++                <div style={{ fontSize: 56 }}>ΓÜá∩╕Å</div>
++                <h2 style={{ color: '#e74c3c', marginTop: 16, fontSize: 22 }}>
++                    Exam Auto-Submitted
++                </h2>
++                <p style={{ color: '#f0f2f8', marginTop: 12, lineHeight: 1.6 }}>
++                    Your exam was automatically submitted because you left the exam window <strong>3 times</strong>.
++                    Your submission has been <strong style={{ color: '#e74c3c' }}>flagged for review</strong> by your teacher.
++                </p>
++                <button
++                    autoFocus
++                    onClick={onReturn}
++                    onKeyDown={e => e.key === 'Enter' && onReturn()}
++                    style={{
++                        marginTop: 28,
++                        padding: '14px 36px',
++                        background: '#e74c3c',
++                        color: 'white',
++                        border: 'none',
++                        borderRadius: 10,
++                        fontSize: 16,
++                        fontWeight: 600,
++                        cursor: 'pointer',
++                        width: '100%',
++                    }}
++                >
++                    Return to Dashboard
++                </button>
++            </div>
++        </div>
++    );
++}
+ 
+ // ΓöÇΓöÇ Helpers ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ 
+@@ -50,19 +97,13 @@ export default function ExamView() {
+     const { id } = useParams();
+     const navigate = useNavigate();
+     const handleSubmitRef = useRef(null);
++    const playbackAutoOpenedRef = useRef(false);
++    const answerPlaybackRef = useRef(null);
+ 
+     // ΓöÇΓöÇ TTS Hook ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+-    // TODO: Get TTS settings from Redux or login response
+-    const { speak, cancel } = useTTS({ rate: 1.0, pitch: 1.0, voice: null });
+-
+-    // ΓöÇΓöÇ Tab Detection Hook ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+-    const { violations } = useTabDetection({
+-        speak,
+-        maxViolations: 3,
+-        onViolation: (violation, allViolations) => {
+-            setTabViolations(allViolations);
+-        }
+-    });
++    const { speak: baseSpeak, cancel } = useTTS({ rate: 1.0, pitch: 1.0, voice: null });
++    const stopListeningRef = useRef(null);
++    const startListeningRef = useRef(null);
+ 
+     // ΓöÇΓöÇ Exam data ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     const [exam, setExam] = useState(null);
+@@ -71,7 +112,10 @@ export default function ExamView() {
+ 
+     // ΓöÇΓöÇ Answers ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     const [answers, setAnswers] = useState({});   // { [questionId]: answerString }
++    const [interimTranscripts, setInterimTranscripts] = useState({});
++    const [pendingVoiceAutoStartSeq, setPendingVoiceAutoStartSeq] = useState(0);
+     const answersRef = useRef({});
++    const lastInterimUpdateAtRef = useRef(0);
+ 
+     // ΓöÇΓöÇ Navigation ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     const [currentIndex, setCurrentIndex] = useState(0);
+@@ -83,20 +127,84 @@ export default function ExamView() {
+     // ΓöÇΓöÇ Submission / grading ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     const [submitting, setSubmitting] = useState(false);
+     const [submitted, setSubmitted] = useState(false);
+-    const { gradingStatus, setGradingStatus, startGradingPoll, stopGradingPoll } = useGradingStatusPoll({
+-        id,
+-        api,
+-        pollIntervalMs: POLL_INTERVAL_MS,
+-        maxRetries: MAX_POLL_RETRIES,
+-    });
+-
+     // ΓöÇΓöÇ Review screen ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     const [showReview, setShowReview] = useState(false);
+ 
+     // ΓöÇΓöÇ New Features State ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     const [showPanic, setShowPanic] = useState(false);
+     const [showPlayback, setShowPlayback] = useState(false);
+-    const [tabViolations, setTabViolations] = useState([]);
++    const [tabViolations, setTabViolations] = useState(0);
++    const tabViolationsRef = useRef(0);
++    const examSpeechStateRef = useRef({
++        voiceMode: true,
++        showReview: false,
++        showPanic: false,
++        showPlayback: false,
++    });
++    const [showViolationModal, setShowViolationModal] = useState(false);
++    const autoSubmittedByViolationRef = useRef(false);
++    const mountedRef = useRef(true);
++
++    useEffect(() => {
++        examSpeechStateRef.current = {
++            ...examSpeechStateRef.current,
++            showReview,
++            showPanic,
++            showPlayback,
++        };
++    }, [showPanic, showPlayback, showReview]);
++
++    const speak = useCallback((text, options = {}) => {
++        // Always stop STT before TTS so synthesis audio cannot get transcribed.
++        stopListeningRef.current?.();
++
++        const userOnEnd = options.onEnd;
++        baseSpeak(text, {
++            ...options,
++            onEnd: (...args) => {
++                // Re-evaluate state at fire time ΓÇö captures showPlayback, showReview, etc.
++                // changes that happen *during* TTS (e.g. panel opening mid-utterance).
++                const uiState = examSpeechStateRef.current;
++                const shouldResume =
++                    uiState.voiceMode &&
++                    !submitting &&
++                    !submitted &&
++                    !uiState.showReview &&
++                    !uiState.showPanic &&
++                    !uiState.showPlayback;
++                if (shouldResume) {
++                    // Use the live ref so the latest startListeningForCurrent is called,
++                    // which correctly checks showPlayback in its own closure.
++                    setTimeout(() => {
++                        startListeningRef.current?.({ bypassMinRestart: true, restartDeafMs: 2000 });
++                    }, 500);
++                }
++                if (typeof userOnEnd === 'function') userOnEnd(...args);
++            },
++        });
++    }, [baseSpeak, submitted, submitting]);
++
++    const { pollUntilFinalized } = useSubmissionStatusPoll({
++        api,
++        id,
++        speak,
++        navigate,
++        mountedRef,
++    });
++
++    const saveViolationCount = useCallback(async (violationCount) => {
++        if (!id) return;
++        if (typeof violationCount !== 'number') return;
++        try {
++            await api.post(`/exam/${id}/submit`, {
++                answers: answersRef.current || {},
++                tab_violations: violationCount,
++                final: false,
++            });
++        } catch {
++            // Non-blocking: progress save failures should not interrupt the exam flow.
++        }
++    }, [id]);
+ 
+     // ΓöÇΓöÇ Save status ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     const [saveStatus, setSaveStatus] = useState('saved');
+@@ -108,7 +216,6 @@ export default function ExamView() {
+     // ΓöÇΓöÇ Voice / global exam mode ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     const [readingMode, setReadingMode] = useState('brief'); // 'brief' | 'detailed'
+     const [paused, setPaused] = useState(false);
+-    const mountedRef = useRef(true);
+ 
+     // ΓöÇΓöÇ Timer ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     const { secondsLeft, stop: stopTimer } = useExamTimer({
+@@ -116,10 +223,81 @@ export default function ExamView() {
+         paused,
+         enabled: !submitted,
+         onExpire: () => {
+-            if (!submitted) handleSubmitRef.current?.(true);
++            if (!submitted) handleAutoSubmit();
+         },
+     });
+ 
++    const submitExam = useCallback(async (options = {}) => {
++        if (submitting || submitted) return;
++        setSubmitting(true);
++        setShowReview(false);
++        stopTimer();
++
++        try {
++            const safeAnswers = answersRef.current && typeof answersRef.current === 'object'
++                ? answersRef.current
++                : {};
++            const res = await api.post(`/exam/${id}/submit`, {
++                answers: safeAnswers,
++                tab_violations: tabViolationsRef.current || 0,
++                final: true,
++            });
++            if (mountedRef.current) {
++                setSubmitted(true);
++                if (typeof options.onSuccess === 'function') {
++                    options.onSuccess();
++                    return;
++                }
++
++                if (res?.status === 202 || res?.data?.status === 'grading') {
++                    pollUntilFinalized();
++                } else {
++                    speak('Your exam has been submitted successfully. Returning to dashboard.');
++                    navigate('/student');
++                }
++            }
++        } catch (err) {
++            if (mountedRef.current) {
++                setError('Submission failed. Please try again.');
++                setSubmitting(false);
++            }
++        }
++    }, [id, navigate, pollUntilFinalized, speak, stopTimer, submitting, submitted]);
++
++    const handleAutoSubmit = useCallback(() => {
++        submitExam({
++            onSuccess: () => {
++                setShowViolationModal(true);
++                speak('Your exam has been automatically submitted and flagged for review. Please click Return to Dashboard.');
++            },
++        });
++    }, [submitExam, speak]);
++
++    const handleVisibilityChange = useCallback(() => {
++        if (!document.hidden) return;
++        if (submitting || submitted) return;
++        const newCount = tabViolationsRef.current + 1;
++        tabViolationsRef.current = newCount;
++        setTabViolations(newCount);
++        saveViolationCount(newCount);
++
++        if (newCount === 1) {
++            speak('Warning: Do not leave the exam window. This has been recorded.');
++        } else if (newCount === 2) {
++            speak('Final warning. One more violation will automatically submit your exam.');
++        } else if (newCount >= 3) {
++            if (autoSubmittedByViolationRef.current) return;
++            autoSubmittedByViolationRef.current = true;
++            speak('You have left the exam window too many times. Your exam is being submitted now.');
++            setTimeout(() => handleAutoSubmit(), 2000);
++        }
++    }, [handleAutoSubmit, saveViolationCount, speak, submitted, submitting]);
++
++    useEffect(() => {
++        document.addEventListener('visibilitychange', handleVisibilityChange);
++        return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
++    }, [handleVisibilityChange]);
++
+     // ΓöÇΓöÇ Derived values ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     const questions = exam?.questions ?? [];
+     const total = questions.length;
+@@ -178,23 +356,29 @@ export default function ExamView() {
+     // Fired only once after questions are available. Using a ref so the listener
+     // is registered a single time and never re-added on question navigation.
+     const hasIntroFiredRef = useRef(false);
++    const introSequenceActiveRef = useRef(false);
+     useEffect(() => {
+         if (!questions.length || hasIntroFiredRef.current) return;
+ 
+-        let firstQuestionTimer = null;
+         const handleUserGesture = () => {
+             hasIntroFiredRef.current = true;
++            introSequenceActiveRef.current = true;
+             const introText = getExamTypeTTSIntro(examType);
+-            speak(introText);
+-
+-            // Read first question after intro
+-            firstQuestionTimer = setTimeout(() => {
+-                const firstQ = questions[0];
+-                if (firstQ) {
+-                    const questionText = getQuestionInstruction(firstQ, 1, questions.length);
+-                    speak(questionText);
+-                }
+-            }, 2000);
++            speak(introText, {
++                onEnd: () => {
++                    const firstQ = questions[0];
++                    if (!firstQ) return;
++                    const firstQuestionText = getQuestionInstruction(firstQ, 1, questions.length);
++                    speak(firstQuestionText, {
++                        onEnd: () => {
++                            introSequenceActiveRef.current = false;
++                            setTimeout(() => {
++                                setPendingVoiceAutoStartSeq((n) => n + 1);
++                            }, 300);
++                        },
++                    });
++                },
++            });
+ 
+             // Remove event listeners after first interaction
+             document.removeEventListener('click', handleUserGesture);
+@@ -208,15 +392,16 @@ export default function ExamView() {
+         document.addEventListener('touchstart', handleUserGesture);
+ 
+         return () => {
+-            if (firstQuestionTimer) clearTimeout(firstQuestionTimer);
+             document.removeEventListener('click', handleUserGesture);
+             document.removeEventListener('keydown', handleUserGesture);
+             document.removeEventListener('touchstart', handleUserGesture);
+         };
+-    }, [questions.length]); // eslint-disable-line react-hooks/exhaustive-deps
++    }, [examType, questions, speak]);
+ 
+     // ΓöÇΓöÇ TTS per-question read-aloud ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     useEffect(() => {
++        if (!hasIntroFiredRef.current) return;
++        if (introSequenceActiveRef.current) return;
+         if (!currentQuestion) return;
+         const t = setTimeout(() => {
+             const questionText = getQuestionInstruction(currentQuestion, currentIndex + 1, total);
+@@ -233,7 +418,6 @@ export default function ExamView() {
+         return () => {
+             mountedRef.current = false;
+             stopTimer();
+-            stopGradingPoll();
+             clearTimeout(draftTimerRef.current);
+             clearTimeout(transitionTimerRef.current);
+             window.speechSynthesis?.cancel();
+@@ -253,7 +437,11 @@ export default function ExamView() {
+         draftInFlightRef.current = true;
+         try {
+             setSaveStatus('saving');
+-            await api.post(`/exam/${id}/submit`, { answers: nextAnswers, final: false });
++            await api.post(`/exam/${id}/submit`, {
++                answers: nextAnswers,
++                tab_violations: tabViolationsRef.current,
++                final: false,
++            });
+             draftDirtyRef.current = false;
+             setSaveStatus('saved');
+         } catch {
+@@ -272,6 +460,12 @@ export default function ExamView() {
+     const handleAnswerChange = useCallback((questionId, value) => {
+         if (!questionId) return;
+         const qKey = String(questionId);
++        setInterimTranscripts(prev => {
++            if (!(qKey in prev)) return prev;
++            const next = { ...prev };
++            delete next[qKey];
++            return next;
++        });
+         const prev = answersRef.current[qKey];
+         if (prev === value) return;
+ 
+@@ -315,6 +509,18 @@ export default function ExamView() {
+     const goPrev = useCallback(() => navigateTo(currentIndex - 1), [currentIndex, navigateTo]);
+     const jumpTo = useCallback((i) => navigateTo(i), [navigateTo]);
+ 
++    const displayAnswers = useMemo(() => {
++        if (!currentQuestion?._id) return answers;
++        const qId = String(currentQuestion._id);
++        const interim = String(interimTranscripts[qId] ?? '').trim();
++        if (!interim) return answers;
++        const base = String(answers[qId] ?? '').trim();
++        return {
++            ...answers,
++            [qId]: base ? `${base} ${interim}` : interim,
++        };
++    }, [answers, currentQuestion, interimTranscripts]);
++
+     // ΓöÇΓöÇ Voice controller (STT + intent dispatch) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     const {
+         voiceMode,
+@@ -329,12 +535,16 @@ export default function ExamView() {
+         currentIndex,
+         total,
+         readOnly,
++        showPlayback,
+         showReview,
+         showPanic,
+         secondsLeft,
+         speak,
+         cancel,
+-        onHelp: () => setShowPanic(true),
++        onHelp: () => {
++            stopListening();
++            setShowPanic(true);
++        },
+         onTimeRemaining: (s) => {
+             const secs = Math.max(0, Math.floor(Number(s || 0)));
+             const msg = `${Math.floor(secs / 60)} minutes and ${secs % 60} seconds remaining`;
+@@ -343,27 +553,32 @@ export default function ExamView() {
+         onSelectMCQ: (qId, letter) => {
+             handleAnswerChange(qId, letter);
+             // Always speak confirmation and auto-advance (voice-first behaviour)
+-            speak(`Option ${letter} selected. Moving to next question.`, {
++            speak(`Option ${letter} selected.`, {
+                 onEnd: () => {
+                     if (currentIndex < total - 1) {
+                         goNext();
+                     } else {
+-                        speak("You're on the last question. Opening review.");
+-                        setShowReview(true);
++                        openReviewPanel();
+                     }
+                 },
+             });
+         },
+         onNext: () => {
+             if (currentIndex >= total - 1) {
+-                speak("You're on the last question. Opening review and submit.");
+-                setShowReview(true);
++                openReviewPanel();
++                return;
++            }
++            goNext();
++        },
++        onSkip: () => {
++            if (currentIndex >= total - 1) {
++                speak("You're already on the last question.");
+                 return;
+             }
+             goNext();
+         },
+         onPrev: goPrev,
+-        onSubmit: () => setShowReview(true),
++        onSubmit: () => openReviewPanel(),
+         onClear: (qId) => handleAnswerChange(qId, ''),
+         onRepeat: (q, idx, t) => speak(getQuestionInstruction(q, idx + 1, t)),
+         onDictate: (qId, text) => {
+@@ -371,7 +586,27 @@ export default function ExamView() {
+             const merged = prevText ? `${prevText} ${text}` : text;
+             handleAnswerChange(qId, merged);
+         },
+-        onReview: () => setShowReview(true),
++        onInterimTranscript: (qId, text) => {
++            if (!qId) return;
++
++            const now = Date.now();
++            const isClear = !text;
++            if (!isClear && now - lastInterimUpdateAtRef.current < 180) return;
++            lastInterimUpdateAtRef.current = now;
++
++            setInterimTranscripts(prev => {
++                const qKey = String(qId);
++                if (!text) {
++                    if (!(qKey in prev)) return prev;
++                    const next = { ...prev };
++                    delete next[qKey];
++                    return next;
++                }
++                if (prev[qKey] === text) return prev;
++                return { ...prev, [qKey]: text };
++            });
++        },
++        onReview: () => openReviewPanel(),
+         onReadOptions: (q) => {
+             if (!Array.isArray(q?.options) || q.options.length === 0) {
+                 speak('No options available for this question.');
+@@ -387,9 +622,8 @@ export default function ExamView() {
+         },
+         onResume: () => {
+             setShowPanic(false);
+-            speak('Resuming your exam.');
+-            // Re-engage mic after help closes
+             setTimeout(() => startListeningForCurrent(), 600);
++            speak('Resuming your exam.');
+         },
+         // ΓöÇΓöÇ Written-question voice commands ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+         onReadAnswer: (qId) => {
+@@ -418,6 +652,61 @@ export default function ExamView() {
+         onUndo: () => undoCurrent(),
+     });
+ 
++    const openReviewPanel = useCallback(() => {
++        if (showPlayback || playbackAutoOpenedRef.current) return;
++        console.log('[ExamView] openReviewPanel called');
++        playbackAutoOpenedRef.current = true;
++        stopListening();
++        speak(
++            'That was the last question. We are now moving to the review panel. '
++            + 'I will read each of your answers one by one. '
++            + 'You can say next to continue, previous to go back, '
++            + 'change to update an answer, or skip all to go directly to submit.',
++            {
++            onEnd: () => {
++                console.log('[ExamView] setShowPlayback(true)');
++                setShowPlayback(true);
++                setTimeout(() => {
++                    answerPlaybackRef.current?.startReview?.();
++                }, 300);
++            },
++            }
++        );
++    }, [showPlayback, speak, stopListening]);
++
++    const handlePlaybackClose = useCallback(() => {
++        setShowPlayback(false);
++        playbackAutoOpenedRef.current = false;
++        setTimeout(() => startListeningForCurrent(), 500);
++    }, [startListeningForCurrent]);
++
++    useEffect(() => {
++        examSpeechStateRef.current = {
++            ...examSpeechStateRef.current,
++            voiceMode,
++        };
++        stopListeningRef.current = stopListening;
++        startListeningRef.current = startListeningForCurrent;
++    }, [voiceMode, stopListening, startListeningForCurrent]);
++
++    useEffect(() => {
++        if (!pendingVoiceAutoStartSeq) return;
++        setVoiceMode(true);
++        startListeningForCurrent();
++    }, [pendingVoiceAutoStartSeq, setVoiceMode, startListeningForCurrent]);
++
++
++
++    const handlePanicOpen = useCallback(() => {
++        stopListening();
++        setShowPanic(true);
++    }, [stopListening]);
++
++    const handlePanicResume = useCallback(() => {
++        setShowPanic(false);
++        setTimeout(() => startListeningForCurrent(), 600);
++    }, [startListeningForCurrent]);
++
+ 
+     // ΓöÇΓöÇ Undo / Redo for current question ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     const canUndo = useMemo(() => {
+@@ -436,7 +725,6 @@ export default function ExamView() {
+         const qId = currentQuestion?._id != null ? String(currentQuestion._id) : null;
+         if (!qId) return;
+ 
+-        let nextAnswers = null;
+         setAnswerHistory(prevHist => {
+             const entry = prevHist[qId];
+             if (!entry || entry.past.length === 0) return prevHist;
+@@ -444,28 +732,26 @@ export default function ExamView() {
+             const newPast = entry.past.slice(0, -1);
+             const currentValue = answersRef.current[qId] ?? '';
+             const newFuture = [currentValue, ...(entry.future || [])];
+-            nextAnswers = { ...answersRef.current, [qId]: previousValue };
+-            return {
+-                ...prevHist,
+-                [qId]: { past: newPast, future: newFuture },
+-            };
+-        });
++            const nextAnswers = { ...answersRef.current, [qId]: previousValue };
+ 
+-        if (nextAnswers) {
+             answersRef.current = nextAnswers;
+             setAnswers(nextAnswers);
+             draftDirtyRef.current = true;
+             clearTimeout(draftTimerRef.current);
+             const delay = examType === 'writing-only' ? DRAFT_SAVE_DELAY_WRITTEN : DRAFT_SAVE_DELAY_MCQ;
+             draftTimerRef.current = setTimeout(() => saveDraft(nextAnswers), delay);
+-        }
++
++            return {
++                ...prevHist,
++                [qId]: { past: newPast, future: newFuture },
++            };
++        });
+     }, [currentQuestion, examType, saveDraft]);
+ 
+     const redoCurrent = useCallback(() => {
+         const qId = currentQuestion?._id != null ? String(currentQuestion._id) : null;
+         if (!qId) return;
+ 
+-        let nextAnswers = null;
+         setAnswerHistory(prevHist => {
+             const entry = prevHist[qId];
+             if (!entry || !entry.future || entry.future.length === 0) return prevHist;
+@@ -473,21 +759,20 @@ export default function ExamView() {
+             const newFuture = entry.future.slice(1);
+             const currentValue = answersRef.current[qId] ?? '';
+             const newPast = [...(entry.past || []), currentValue];
+-            nextAnswers = { ...answersRef.current, [qId]: nextValue };
+-            return {
+-                ...prevHist,
+-                [qId]: { past: newPast, future: newFuture },
+-            };
+-        });
++            const nextAnswers = { ...answersRef.current, [qId]: nextValue };
+ 
+-        if (nextAnswers) {
+             answersRef.current = nextAnswers;
+             setAnswers(nextAnswers);
+             draftDirtyRef.current = true;
+             clearTimeout(draftTimerRef.current);
+             const delay = examType === 'writing-only' ? DRAFT_SAVE_DELAY_WRITTEN : DRAFT_SAVE_DELAY_MCQ;
+             draftTimerRef.current = setTimeout(() => saveDraft(nextAnswers), delay);
+-        }
++
++            return {
++                ...prevHist,
++                [qId]: { past: newPast, future: newFuture },
++            };
++        });
+     }, [currentQuestion, examType, saveDraft]);
+ 
+     // ΓöÇΓöÇ Submission ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+@@ -503,26 +788,8 @@ export default function ExamView() {
+             }
+         }
+ 
+-        setSubmitting(true);
+-        setShowReview(false);
+-        stopTimer();
+-        stopGradingPoll();
+-
+-        try {
+-            await api.post(`/exam/${id}/submit`, {
+-                answers: answersRef.current,
+-                tab_violations: tabViolations,
+-                final: true,
+-            });
+-            setSubmitted(true);
+-            startGradingPoll();
+-        } catch (err) {
+-            if (mountedRef.current) {
+-                setError('Submission failed. Please try again.');
+-                setSubmitting(false);
+-            }
+-        }
+-    }, [id, submitting, submitted, questions]);
++        await submitExam();
++    }, [questions, submitExam, submitting, submitted]);
+ 
+     handleSubmitRef.current = handleSubmit;
+ 
+@@ -576,52 +843,6 @@ export default function ExamView() {
+         );
+     }
+ 
+-    // ΓöÇΓöÇ Grading complete screen ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+-    if (gradingStatus === 'graded') {
+-        return (
+-            <div className="min-h-screen flex flex-col items-center justify-center"
+-                style={{ background: 'var(--bg)', color: 'var(--text)', gap: 16 }}>
+-                <p style={{ fontSize: 36 }}>≡ƒÄë</p>
+-                <h1 style={{ fontSize: 26, fontWeight: 800, color: 'var(--success)' }}>
+-                    Exam Submitted & Graded
+-                </h1>
+-                <p style={{ color: 'var(--muted)' }}>Your results have been recorded.</p>
+-                <button
+-                    type="button"
+-                    onClick={() => navigate('/student')}
+-                    style={{
+-                        marginTop: 16,
+-                        padding: '12px 32px',
+-                        background: 'var(--accent)',
+-                        color: 'var(--bg)',
+-                        border: 'none',
+-                        borderRadius: 50,
+-                        fontWeight: 800,
+-                        fontSize: 15,
+-                        cursor: 'pointer',
+-                    }}
+-                >
+-                    Back to Dashboard
+-                </button>
+-            </div>
+-        );
+-    }
+-
+-    if (submitted && gradingStatus === 'grading') {
+-        return (
+-            <div className="min-h-screen flex flex-col items-center justify-center"
+-                style={{ background: 'var(--bg)', color: 'var(--text)', gap: 12 }}>
+-                <p style={{ fontSize: 32 }}>ΓÅ│</p>
+-                <h1 style={{ fontSize: 22, fontWeight: 800, color: 'var(--warn)' }}>
+-                    Grading in ProgressΓÇª
+-                </h1>
+-                <p style={{ color: 'var(--muted)' }}>
+-                    Your answers are being graded. You can safely close this page.
+-                </p>
+-            </div>
+-        );
+-    }
+-
+     // ΓöÇΓöÇ Submit button text / style ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     const submitText = answered === 0
+         ? 'Answer at least one question to submit'
+@@ -646,12 +867,15 @@ export default function ExamView() {
+     // ΓöÇΓöÇ Main render ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     return (
+         <div className="exam-root min-h-screen" style={{ background: 'var(--bg)', color: 'var(--text)' }}>
++            {showViolationModal && (
++                <ViolationModal onReturn={() => navigate('/student')} />
++            )}
+             <ExamTopBar
+                 title={exam?.title || 'Exam'}
+                 subtitle={paused ? 'Paused' : 'Voice-first exam mode'}
+                 timerText={secondsLeft === null ? '--:--:--' : formatHMS(secondsLeft)}
+                 isTimeCritical={isTimeCritical(secondsLeft ?? 0)}
+-                violationsCount={violations.length}
++                violationsCount={tabViolations}
+                 readingMode={readingMode}
+                 onToggleReadingMode={setReadingMode}
+                 mcqCount={counts?.mcq ?? 0}
+@@ -661,7 +885,7 @@ export default function ExamView() {
+                     setPaused(p => !p);
+                     stopListening();
+                 }}
+-                onHelp={() => setShowPanic(true)}
++                onHelp={handlePanicOpen}
+             />
+ 
+             <ExamSidebar
+@@ -685,7 +909,10 @@ export default function ExamView() {
+                 onNewStep={() => { /* TODO: wire math steps */ }}
+                 onUndo={undoCurrent}
+                 onRedo={redoCurrent}
+-                onReviewAll={() => setShowPlayback(true)}
++                onReviewAll={() => {
++                    playbackAutoOpenedRef.current = false;
++                    openReviewPanel();
++                }}
+                 onSubmit={() => setShowReview(true)}
+                 canUndo={canUndo}
+                 canRedo={canRedo}
+@@ -698,7 +925,7 @@ export default function ExamView() {
+                 total={total}
+                 answered={answered}
+                 pct={pct}
+-                answers={answers}
++                answers={displayAnswers}
+                 readOnly={readOnly}
+                 examType={examType}
+                 isListening={isListening}
+@@ -710,7 +937,7 @@ export default function ExamView() {
+                 onGoNext={goNext}
+                 onToggleVoiceMode={() => setVoiceMode(v => !v)}
+                 onStartListening={() => { setVoiceMode(true); startListeningForCurrent(); }}
+-                onOpenReview={() => setShowReview(true)}
++                onOpenReview={openReviewPanel}
+                 onAnswerChange={handleAnswerChange}
+                 onSpeak={speak}
+                 getQuestionInstruction={getQuestionInstruction}
+@@ -729,11 +956,7 @@ export default function ExamView() {
+                 <PanicHelp
+                     examType={examType}
+                     currentQuestion={currentQuestion}
+-                    onDismiss={() => {
+-                        setShowPanic(false);
+-                        // Re-engage mic after overlay closes
+-                        setTimeout(() => startListeningForCurrent(), 600);
+-                    }}
++                    onResume={handlePanicResume}
+                     speak={speak}
+                     cancel={cancel}
+                 />
+@@ -742,10 +965,20 @@ export default function ExamView() {
+             {/* Answer Playback */}
+             {showPlayback && (
+                 <AnswerPlayback
++                    ref={answerPlaybackRef}
++                    show={showPlayback}
+                     questions={questions}
+                     answers={answers}
+-                    onEdit={(index) => { setShowPlayback(false); setCurrentIndex(index); }}
+-                    onComplete={() => { setShowPlayback(false); setShowReview(true); }}
++                    onEdit={(index) => {
++                        handlePlaybackClose();
++                        setCurrentIndex(index);
++                    }}
++                    onComplete={() => {
++                        handlePlaybackClose();
++                        setShowReview(true);
++                    }}
++                    onUpdateAnswer={(qId, ans) => handleAnswerChange(qId, ans)}
++                    onClose={handlePlaybackClose}
+                     examType={examType}
+                     speak={speak}
+                     cancel={cancel}
+@@ -758,6 +991,8 @@ export default function ExamView() {
+                     questions={questions}
+                     answers={answers}
+                     unanswered={unanswered}
++                    speak={speak}
++                    cancel={cancel}
+                     onClose={() => setShowReview(false)}
+                     onEdit={(index) => { setCurrentIndex(index); setShowReview(false); }}
+                     onSubmit={handleSubmit}

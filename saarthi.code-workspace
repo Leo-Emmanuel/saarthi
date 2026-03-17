@@ -1,0 +1,15 @@
+{
+    "folders": [
+        {
+            "path": "backend",
+            "name": "Backend"
+        },
+        {
+            "path": "frontend",
+            "name": "Frontend"
+        }
+    ],
+    "settings": {
+        "python.defaultInterpreterPath": "${workspaceFolder:Backend}/venv/Scripts/python.exe"
+    }
+}

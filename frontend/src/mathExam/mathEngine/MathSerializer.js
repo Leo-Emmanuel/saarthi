@@ -99,6 +99,13 @@ export const toLatex = (node) => {
         case NodeType.SEQUENCE:
             return node.nodes.map(toLatex).join(' ');
 
+        case NodeType.ALIGNED_STEPS: {
+            const lines = node.steps.map((step, i) =>
+                `\\text{Step ${i + 1}: } & ${toLatex(step.ast)}`
+            ).join(' \\\\\n');
+            return `\\begin{aligned}\n${lines}\n\\end{aligned}`;
+        }
+
         default:
             return '';
     }
@@ -146,7 +153,10 @@ export const toBriefSpeech = (node) => {
             if (!node.base) return `log of ${toBriefSpeech(node.argument)}`;
             return `log base ${toBriefSpeech(node.base)} of ${toBriefSpeech(node.argument)}`;
         case NodeType.TRIG: {
-            const power = node.power ? ` squared` : '';
+            const powerValue = node.power?.value;
+            const power = node.power
+                ? (String(powerValue) === '2' ? ' squared' : ` to the power ${toBriefSpeech(node.power)}`)
+                : '';
             return `${node.fn}${power} of ${toBriefSpeech(node.argument)}`;
         }
         case NodeType.MATRIX:
@@ -161,6 +171,10 @@ export const toBriefSpeech = (node) => {
             return `negative ${toBriefSpeech(node.expr)}`;
         case NodeType.SEQUENCE:
             return node.nodes.map(toBriefSpeech).join(' ');
+        case NodeType.ALIGNED_STEPS:
+            return node.steps.map((step, i) =>
+                `Step ${i + 1}: ${toBriefSpeech(step.ast)}`
+            ).join('. ');
         default:
             return '';
     }
@@ -232,6 +246,12 @@ export const toDetailedSpeech = (node, depth = 0) => {
             return `negative ${toDetailedSpeech(node.expr, depth + 1)}`;
         case NodeType.SEQUENCE:
             return node.nodes.map((n, i) => `part ${i + 1}: ${toDetailedSpeech(n, depth + 1)}`).join('. ');
+        case NodeType.ALIGNED_STEPS: {
+            const total = node.steps.length;
+            return node.steps.map((step, i) =>
+                `Step ${i + 1} of ${total}: ${toDetailedSpeech(step.ast, depth + 1)}`
+            ).join('. ');
+        }
         default:
             return '';
     }

@@ -16,7 +16,7 @@ export function detectExamType(questions) {
         || /\bA\)\s+/i.test(q?.text || '')
     );
     const hasWriting = questions.some(q =>
-        (q?.type === 'text' || q?.type === 'voice') &&
+        q?.type === 'text' &&
         (!Array.isArray(q?.options) || q.options.length === 0)
     );
 
@@ -39,7 +39,7 @@ export function isMCQQuestion(question) {
 export function isWrittenQuestion(question) {
     if (!question) return false;
     const hasOptions = Array.isArray(question.options) && question.options.length > 0;
-    return !hasOptions && (question.type === 'text' || question.type === 'voice');
+    return !hasOptions && question.type === 'text';
 }
 
 // ── Question counts ────────────────────────────────────────────────────────────
@@ -50,7 +50,7 @@ export function getQuestionCounts(questions) {
         total: list.length,
         mcq: list.filter(isMCQQuestion).length,
         writing: list.filter(isWrittenQuestion).length,
-        voice: list.filter(q => q.type === 'voice').length,
+        voice: 0,
     };
 }
 

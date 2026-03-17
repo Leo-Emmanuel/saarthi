@@ -73,7 +73,7 @@ def _fetch_submissions(exam_id=None, page=1, per_page=_DEFAULT_PAGE_SIZE):
 
     Uses batch $in lookups to avoid the N+1 pattern.
     """
-    query = {"status": {"$in": ["submitted", "grading", "graded"]}}
+    query = {"status": {"$in": ["in_progress", "submitted", "grading", "graded"]}}
     if exam_id:
         oid = _safe_object_id(exam_id)
         if oid:
@@ -89,15 +89,24 @@ def _fetch_submissions(exam_id=None, page=1, per_page=_DEFAULT_PAGE_SIZE):
     )
 
     user_ids = []
+    exam_ids = []
     for d in docs:
         uid = _safe_object_id(d.get("user_id"))
         if uid and uid not in user_ids:
             user_ids.append(uid)
+        eid = _safe_object_id(d.get("exam_id"))
+        if eid and eid not in exam_ids:
+            exam_ids.append(eid)
 
     students_map = {
         str(s["_id"]): s
         for s in _users.find({"_id": {"$in": user_ids}}, {"name": 1, "email": 1, "studentId": 1})
     } if user_ids else {}
+
+    exams_map = {
+        str(e["_id"]): e
+        for e in _exams.find({"_id": {"$in": exam_ids}}, {"title": 1})
+    } if exam_ids else {}
 
     items = []
     for sub in docs:
@@ -106,19 +115,30 @@ def _fetch_submissions(exam_id=None, page=1, per_page=_DEFAULT_PAGE_SIZE):
         submitted_at = sub.get("submitted_at") or sub.get("last_updated")
 
         student_name = student.get("name", "Unknown") if isinstance(student, dict) else "Unknown"
-        
+        student_id = student.get("studentId", "") if isinstance(student, dict) else ""
         student_email = "Unknown"
         if isinstance(student, dict):
-            student_email = student.get("email") or student.get("studentId") or "Unknown"
+            student_email = student.get("email") or student_id or "Unknown"
+
+        exam = exams_map.get(str(sub.get("exam_id", "")))
+        exam_title = exam.get("title", "Unknown") if isinstance(exam, dict) else "Unknown"
 
         items.append({
             "_id": str(sub["_id"]),
             "exam_id": str(sub.get("exam_id", "")),
+            "exam_title": exam_title,
+            "examTitle": exam_title,
             "student": student_name,
+            "student_name": student_name,
+            "student_id": student_id,
+            "studentId": student_id,
             "student_email": student_email,
+            "studentEmail": student_email,
             "submitted_at": submitted_at,
             "is_graded": sub.get("is_graded", False),
+            "score": sub.get("score", 0),
             "total_marks": sub.get("total_marks", 0),
+            "flagged": sub.get("flagged", False),
         })
 
     return items, total
@@ -201,6 +221,37 @@ def get_submissions():
     except Exception:
         _log.exception("Failed to fetch submissions")
         return jsonify({"error": "Failed to fetch submissions"}), 500
+
+
+@evaluation_bp.route("/exams/<exam_id>", methods=["GET"])
+@jwt_required()
+def get_exam_for_evaluation(exam_id):
+    """Fetch a single exam including correct answers (teacher/admin only)."""
+    _, err = _require_evaluator()
+    if err:
+        return err
+
+    oid = _safe_object_id(exam_id)
+    if oid is None:
+        return jsonify({"error": "Invalid exam ID"}), 400
+
+    exam = _exams.find_one({"_id": oid})
+    if not exam:
+        return jsonify({"error": "Exam not found"}), 404
+
+    exam["_id"] = str(exam["_id"])
+    exam["created_by"] = str(exam.get("created_by", ""))
+
+    from routes.exam import _enrich_question_for_client
+    questions = []
+    for q in exam.get("questions", []):
+        q = _enrich_question_for_client(q)
+        if "_id" in q:
+            q["_id"] = str(q["_id"])
+        questions.append(q)
+    exam["questions"] = questions
+
+    return jsonify(exam)
 
 
 @evaluation_bp.route("/submissions/<submission_id>", methods=["GET"])

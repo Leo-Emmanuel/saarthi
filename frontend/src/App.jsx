@@ -1,10 +1,15 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import Login from './pages/Login';
-import Register from './pages/Register';
 import StudentDashboard from './pages/StudentDashboard';
 import TeacherDashboard from './pages/TeacherDashboard';
-import AdminDashboard from './pages/AdminDashboard';
+import AdminLayout from './pages/admin/AdminLayout';
+import AdminHome from './pages/admin/AdminHome';
+import AdminStudents from './pages/admin/AdminStudents';
+import AdminExams from './pages/admin/AdminExams';
+import AdminStaff from './pages/admin/AdminStaff';
+import AdminSettings from './pages/admin/AdminSettings';
+import DashboardLayout from './layouts/DashboardLayout';
 import ExamView from './pages/ExamView';
 import EvaluationView from './pages/EvaluationView';
 import VoiceLogin from './pages/VoiceLogin';
@@ -12,16 +17,23 @@ import MathExamView from './pages/MathExamView';
 import ErrorBoundary from './components/ErrorBoundary';
 import BrowserGuard from './components/BrowserGuard';
 import ProtectedRoute from './components/ProtectedRoute';
+import GlobalAlert from './components/GlobalAlert';
+import usePageVoice from './hooks/usePageVoice';
+
+function PageVoiceAnnouncer() {
+  usePageVoice();
+  return null;
+}
 
 function App() {
   return (
     <BrowserGuard>
       <Router>
         <AuthProvider>
+          <PageVoiceAnnouncer />
           <Routes>
             {/* ── Public routes ─────────────────────────────────────────── */}
             <Route path="/login" element={<Login />} />
-            <Route path="/register" element={<Register />} />
             <Route path="/voice-login" element={<VoiceLogin />} />
             <Route path="/" element={<Navigate to="/login" replace />} />
 
@@ -30,26 +42,36 @@ function App() {
               path="/admin"
               element={
                 <ProtectedRoute requiredRole="admin">
-                  <AdminDashboard />
+                  <AdminLayout />
                 </ProtectedRoute>
               }
-            />
+            >
+              <Route index element={<AdminHome />} />
+              <Route path="students" element={<AdminStudents />} />
+              <Route path="exams" element={<AdminExams />} />
+              <Route path="staff" element={<AdminStaff />} />
+              <Route path="settings" element={<AdminSettings />} />
+            </Route>
             <Route
               path="/teacher"
               element={
                 <ProtectedRoute requiredRole="teacher">
-                  <TeacherDashboard />
+                  <DashboardLayout />
                 </ProtectedRoute>
               }
-            />
+            >
+              <Route index element={<TeacherDashboard />} />
+            </Route>
             <Route
               path="/student"
               element={
                 <ProtectedRoute requiredRole="student">
-                  <StudentDashboard />
+                  <DashboardLayout />
                 </ProtectedRoute>
               }
-            />
+            >
+              <Route index element={<StudentDashboard />} />
+            </Route>
 
             {/* ── Auth-required routes (any logged-in role) ──────────────── */}
             <Route
@@ -87,6 +109,7 @@ function App() {
           </Routes>
         </AuthProvider>
       </Router>
+      <GlobalAlert />
     </BrowserGuard>
   );
 }

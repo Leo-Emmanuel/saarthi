@@ -1,0 +1,1394 @@
+﻿diff --git a/frontend/src/App.jsx b/frontend/src/App.jsx
+index 870cbd2..fa66f30 100644
+--- a/frontend/src/App.jsx
++++ b/frontend/src/App.jsx
+@@ -1,10 +1,14 @@
+ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+ import { AuthProvider } from './context/AuthContext';
+ import Login from './pages/Login';
+-import Register from './pages/Register';
+ import StudentDashboard from './pages/StudentDashboard';
+ import TeacherDashboard from './pages/TeacherDashboard';
+-import AdminDashboard from './pages/AdminDashboard';
++import AdminLayout from './pages/admin/AdminLayout';
++import AdminHome from './pages/admin/AdminHome';
++import AdminStudents from './pages/admin/AdminStudents';
++import AdminExams from './pages/admin/AdminExams';
++import AdminSettings from './pages/admin/AdminSettings';
++import DashboardLayout from './layouts/DashboardLayout';
+ import ExamView from './pages/ExamView';
+ import EvaluationView from './pages/EvaluationView';
+ import VoiceLogin from './pages/VoiceLogin';
+@@ -12,16 +16,23 @@ import MathExamView from './pages/MathExamView';
+ import ErrorBoundary from './components/ErrorBoundary';
+ import BrowserGuard from './components/BrowserGuard';
+ import ProtectedRoute from './components/ProtectedRoute';
++import GlobalAlert from './components/GlobalAlert';
++import usePageVoice from './hooks/usePageVoice';
++
++function PageVoiceAnnouncer() {
++  usePageVoice();
++  return null;
++}
+ 
+ function App() {
+   return (
+     <BrowserGuard>
+       <Router>
+         <AuthProvider>
++          <PageVoiceAnnouncer />
+           <Routes>
+             {/* ΓöÇΓöÇ Public routes ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */}
+             <Route path="/login" element={<Login />} />
+-            <Route path="/register" element={<Register />} />
+             <Route path="/voice-login" element={<VoiceLogin />} />
+             <Route path="/" element={<Navigate to="/login" replace />} />
+ 
+@@ -30,26 +41,35 @@ function App() {
+               path="/admin"
+               element={
+                 <ProtectedRoute requiredRole="admin">
+-                  <AdminDashboard />
++                  <AdminLayout />
+                 </ProtectedRoute>
+               }
+-            />
++            >
++              <Route index element={<AdminHome />} />
++              <Route path="students" element={<AdminStudents />} />
++              <Route path="exams" element={<AdminExams />} />
++              <Route path="settings" element={<AdminSettings />} />
++            </Route>
+             <Route
+               path="/teacher"
+               element={
+                 <ProtectedRoute requiredRole="teacher">
+-                  <TeacherDashboard />
++                  <DashboardLayout />
+                 </ProtectedRoute>
+               }
+-            />
++            >
++              <Route index element={<TeacherDashboard />} />
++            </Route>
+             <Route
+               path="/student"
+               element={
+                 <ProtectedRoute requiredRole="student">
+-                  <StudentDashboard />
++                  <DashboardLayout />
+                 </ProtectedRoute>
+               }
+-            />
++            >
++              <Route index element={<StudentDashboard />} />
++            </Route>
+ 
+             {/* ΓöÇΓöÇ Auth-required routes (any logged-in role) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */}
+             <Route
+@@ -87,6 +107,7 @@ function App() {
+           </Routes>
+         </AuthProvider>
+       </Router>
++      <GlobalAlert />
+     </BrowserGuard>
+   );
+ }
+diff --git a/frontend/src/pages/ExamView.jsx b/frontend/src/pages/ExamView.jsx
+index 832ffad..cac36ee 100644
+--- a/frontend/src/pages/ExamView.jsx
++++ b/frontend/src/pages/ExamView.jsx
+@@ -11,9 +11,8 @@ import ExamControlsPanel from '../components/ExamControlsPanel';
+ import ExamMainContent from '../components/ExamMainContent';
+ import useExamVoiceController from '../hooks/useExamVoiceController';
+ import useExamTimer from '../hooks/useExamTimer';
+-import useGradingStatusPoll from '../hooks/useGradingStatusPoll';
+ import useTTS from '../hooks/useTTS';
+-import useTabDetection from '../hooks/useTabDetection';
++import useSubmissionStatusPoll from '../hooks/useSubmissionStatusPoll';
+ import {
+     detectExamType,
+     getQuestionCounts,
+@@ -38,9 +37,57 @@ const TRANSITION_CARD_DURATION_MS = 2000;
+ const DRAFT_SAVE_DELAY_MCQ = 1800;
+ const DRAFT_SAVE_DELAY_WRITTEN = 4500;
+ 
+-// Grading status polling
+-const POLL_INTERVAL_MS = 3000;
+-const MAX_POLL_RETRIES = 30; // ~90 seconds before giving up
++function ViolationModal({ onReturn }) {
++    return (
++        <div style={{
++            position: 'fixed',
++            inset: 0,
++            background: 'rgba(0,0,0,0.85)',
++            display: 'flex',
++            alignItems: 'center',
++            justifyContent: 'center',
++            zIndex: 9999,
++        }}>
++            <div style={{
++                background: '#1e2130',
++                border: '2px solid #e74c3c',
++                borderRadius: 16,
++                padding: 40,
++                maxWidth: 440,
++                textAlign: 'center',
++                boxShadow: '0 8px 40px rgba(231,76,60,0.3)',
++            }}>
++                <div style={{ fontSize: 56 }}>ΓÜá∩╕Å</div>
++                <h2 style={{ color: '#e74c3c', marginTop: 16, fontSize: 22 }}>
++                    Exam Auto-Submitted
++                </h2>
++                <p style={{ color: '#f0f2f8', marginTop: 12, lineHeight: 1.6 }}>
++                    Your exam was automatically submitted because you left the exam window <strong>3 times</strong>.
++                    Your submission has been <strong style={{ color: '#e74c3c' }}>flagged for review</strong> by your teacher.
++                </p>
++                <button
++                    autoFocus
++                    onClick={onReturn}
++                    onKeyDown={e => e.key === 'Enter' && onReturn()}
++                    style={{
++                        marginTop: 28,
++                        padding: '14px 36px',
++                        background: '#e74c3c',
++                        color: 'white',
++                        border: 'none',
++                        borderRadius: 10,
++                        fontSize: 16,
++                        fontWeight: 600,
++                        cursor: 'pointer',
++                        width: '100%',
++                    }}
++                >
++                    Return to Dashboard
++                </button>
++            </div>
++        </div>
++    );
++}
+ 
+ // ΓöÇΓöÇ Helpers ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ 
+@@ -50,19 +97,12 @@ export default function ExamView() {
+     const { id } = useParams();
+     const navigate = useNavigate();
+     const handleSubmitRef = useRef(null);
++    const playbackAutoOpenedRef = useRef(false);
+ 
+     // ΓöÇΓöÇ TTS Hook ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+-    // TODO: Get TTS settings from Redux or login response
+-    const { speak, cancel } = useTTS({ rate: 1.0, pitch: 1.0, voice: null });
+-
+-    // ΓöÇΓöÇ Tab Detection Hook ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+-    const { violations } = useTabDetection({
+-        speak,
+-        maxViolations: 3,
+-        onViolation: (violation, allViolations) => {
+-            setTabViolations(allViolations);
+-        }
+-    });
++    const { speak: baseSpeak, cancel } = useTTS({ rate: 1.0, pitch: 1.0, voice: null });
++    const stopListeningRef = useRef(null);
++    const startListeningRef = useRef(null);
+ 
+     // ΓöÇΓöÇ Exam data ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     const [exam, setExam] = useState(null);
+@@ -71,7 +111,10 @@ export default function ExamView() {
+ 
+     // ΓöÇΓöÇ Answers ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     const [answers, setAnswers] = useState({});   // { [questionId]: answerString }
++    const [interimTranscripts, setInterimTranscripts] = useState({});
++    const [pendingVoiceAutoStartSeq, setPendingVoiceAutoStartSeq] = useState(0);
+     const answersRef = useRef({});
++    const lastInterimUpdateAtRef = useRef(0);
+ 
+     // ΓöÇΓöÇ Navigation ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     const [currentIndex, setCurrentIndex] = useState(0);
+@@ -83,20 +126,84 @@ export default function ExamView() {
+     // ΓöÇΓöÇ Submission / grading ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     const [submitting, setSubmitting] = useState(false);
+     const [submitted, setSubmitted] = useState(false);
+-    const { gradingStatus, setGradingStatus, startGradingPoll, stopGradingPoll } = useGradingStatusPoll({
+-        id,
+-        api,
+-        pollIntervalMs: POLL_INTERVAL_MS,
+-        maxRetries: MAX_POLL_RETRIES,
+-    });
+-
+     // ΓöÇΓöÇ Review screen ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     const [showReview, setShowReview] = useState(false);
+ 
+     // ΓöÇΓöÇ New Features State ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     const [showPanic, setShowPanic] = useState(false);
+     const [showPlayback, setShowPlayback] = useState(false);
+-    const [tabViolations, setTabViolations] = useState([]);
++    const [tabViolations, setTabViolations] = useState(0);
++    const tabViolationsRef = useRef(0);
++    const examSpeechStateRef = useRef({
++        voiceMode: true,
++        showReview: false,
++        showPanic: false,
++        showPlayback: false,
++    });
++    const [showViolationModal, setShowViolationModal] = useState(false);
++    const autoSubmittedByViolationRef = useRef(false);
++    const mountedRef = useRef(true);
++
++    useEffect(() => {
++        examSpeechStateRef.current = {
++            ...examSpeechStateRef.current,
++            showReview,
++            showPanic,
++            showPlayback,
++        };
++    }, [showPanic, showPlayback, showReview]);
++
++    const speak = useCallback((text, options = {}) => {
++        // Always stop STT before TTS so synthesis audio cannot get transcribed.
++        stopListeningRef.current?.();
++
++        const userOnEnd = options.onEnd;
++        baseSpeak(text, {
++            ...options,
++            onEnd: (...args) => {
++                // Re-evaluate state at fire time ΓÇö captures showPlayback, showReview, etc.
++                // changes that happen *during* TTS (e.g. panel opening mid-utterance).
++                const uiState = examSpeechStateRef.current;
++                const shouldResume =
++                    uiState.voiceMode &&
++                    !submitting &&
++                    !submitted &&
++                    !uiState.showReview &&
++                    !uiState.showPanic &&
++                    !uiState.showPlayback;
++                if (shouldResume) {
++                    // Use the live ref so the latest startListeningForCurrent is called,
++                    // which correctly checks showPlayback in its own closure.
++                    setTimeout(() => {
++                        startListeningRef.current?.({ bypassMinRestart: true, restartDeafMs: 2000 });
++                    }, 500);
++                }
++                if (typeof userOnEnd === 'function') userOnEnd(...args);
++            },
++        });
++    }, [baseSpeak, submitted, submitting]);
++
++    const { pollUntilFinalized } = useSubmissionStatusPoll({
++        api,
++        id,
++        speak,
++        navigate,
++        mountedRef,
++    });
++
++    const saveViolationCount = useCallback(async (violationCount) => {
++        if (!id) return;
++        if (typeof violationCount !== 'number') return;
++        try {
++            await api.post(`/exam/${id}/submit`, {
++                answers: answersRef.current || {},
++                tab_violations: violationCount,
++                final: false,
++            });
++        } catch {
++            // Non-blocking: progress save failures should not interrupt the exam flow.
++        }
++    }, [id]);
+ 
+     // ΓöÇΓöÇ Save status ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     const [saveStatus, setSaveStatus] = useState('saved');
+@@ -108,7 +215,6 @@ export default function ExamView() {
+     // ΓöÇΓöÇ Voice / global exam mode ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     const [readingMode, setReadingMode] = useState('brief'); // 'brief' | 'detailed'
+     const [paused, setPaused] = useState(false);
+-    const mountedRef = useRef(true);
+ 
+     // ΓöÇΓöÇ Timer ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     const { secondsLeft, stop: stopTimer } = useExamTimer({
+@@ -116,10 +222,81 @@ export default function ExamView() {
+         paused,
+         enabled: !submitted,
+         onExpire: () => {
+-            if (!submitted) handleSubmitRef.current?.(true);
++            if (!submitted) handleAutoSubmit();
+         },
+     });
+ 
++    const submitExam = useCallback(async (options = {}) => {
++        if (submitting || submitted) return;
++        setSubmitting(true);
++        setShowReview(false);
++        stopTimer();
++
++        try {
++            const safeAnswers = answersRef.current && typeof answersRef.current === 'object'
++                ? answersRef.current
++                : {};
++            const res = await api.post(`/exam/${id}/submit`, {
++                answers: safeAnswers,
++                tab_violations: tabViolationsRef.current || 0,
++                final: true,
++            });
++            if (mountedRef.current) {
++                setSubmitted(true);
++                if (typeof options.onSuccess === 'function') {
++                    options.onSuccess();
++                    return;
++                }
++
++                if (res?.status === 202 || res?.data?.status === 'grading') {
++                    pollUntilFinalized();
++                } else {
++                    speak('Your exam has been submitted successfully. Returning to dashboard.');
++                    navigate('/student');
++                }
++            }
++        } catch (err) {
++            if (mountedRef.current) {
++                setError('Submission failed. Please try again.');
++                setSubmitting(false);
++            }
++        }
++    }, [id, navigate, pollUntilFinalized, speak, stopTimer, submitting, submitted]);
++
++    const handleAutoSubmit = useCallback(() => {
++        submitExam({
++            onSuccess: () => {
++                setShowViolationModal(true);
++                speak('Your exam has been automatically submitted and flagged for review. Please click Return to Dashboard.');
++            },
++        });
++    }, [submitExam, speak]);
++
++    const handleVisibilityChange = useCallback(() => {
++        if (!document.hidden) return;
++        if (submitting || submitted) return;
++        const newCount = tabViolationsRef.current + 1;
++        tabViolationsRef.current = newCount;
++        setTabViolations(newCount);
++        saveViolationCount(newCount);
++
++        if (newCount === 1) {
++            speak('Warning: Do not leave the exam window. This has been recorded.');
++        } else if (newCount === 2) {
++            speak('Final warning. One more violation will automatically submit your exam.');
++        } else if (newCount >= 3) {
++            if (autoSubmittedByViolationRef.current) return;
++            autoSubmittedByViolationRef.current = true;
++            speak('You have left the exam window too many times. Your exam is being submitted now.');
++            setTimeout(() => handleAutoSubmit(), 2000);
++        }
++    }, [handleAutoSubmit, saveViolationCount, speak, submitted, submitting]);
++
++    useEffect(() => {
++        document.addEventListener('visibilitychange', handleVisibilityChange);
++        return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
++    }, [handleVisibilityChange]);
++
+     // ΓöÇΓöÇ Derived values ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     const questions = exam?.questions ?? [];
+     const total = questions.length;
+@@ -178,23 +355,29 @@ export default function ExamView() {
+     // Fired only once after questions are available. Using a ref so the listener
+     // is registered a single time and never re-added on question navigation.
+     const hasIntroFiredRef = useRef(false);
++    const introSequenceActiveRef = useRef(false);
+     useEffect(() => {
+         if (!questions.length || hasIntroFiredRef.current) return;
+ 
+-        let firstQuestionTimer = null;
+         const handleUserGesture = () => {
+             hasIntroFiredRef.current = true;
++            introSequenceActiveRef.current = true;
+             const introText = getExamTypeTTSIntro(examType);
+-            speak(introText);
+-
+-            // Read first question after intro
+-            firstQuestionTimer = setTimeout(() => {
+-                const firstQ = questions[0];
+-                if (firstQ) {
+-                    const questionText = getQuestionInstruction(firstQ, 1, questions.length);
+-                    speak(questionText);
+-                }
+-            }, 2000);
++            speak(introText, {
++                onEnd: () => {
++                    const firstQ = questions[0];
++                    if (!firstQ) return;
++                    const firstQuestionText = getQuestionInstruction(firstQ, 1, questions.length);
++                    speak(firstQuestionText, {
++                        onEnd: () => {
++                            introSequenceActiveRef.current = false;
++                            setTimeout(() => {
++                                setPendingVoiceAutoStartSeq((n) => n + 1);
++                            }, 300);
++                        },
++                    });
++                },
++            });
+ 
+             // Remove event listeners after first interaction
+             document.removeEventListener('click', handleUserGesture);
+@@ -208,15 +391,16 @@ export default function ExamView() {
+         document.addEventListener('touchstart', handleUserGesture);
+ 
+         return () => {
+-            if (firstQuestionTimer) clearTimeout(firstQuestionTimer);
+             document.removeEventListener('click', handleUserGesture);
+             document.removeEventListener('keydown', handleUserGesture);
+             document.removeEventListener('touchstart', handleUserGesture);
+         };
+-    }, [questions.length]); // eslint-disable-line react-hooks/exhaustive-deps
++    }, [examType, questions, speak]);
+ 
+     // ΓöÇΓöÇ TTS per-question read-aloud ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     useEffect(() => {
++        if (!hasIntroFiredRef.current) return;
++        if (introSequenceActiveRef.current) return;
+         if (!currentQuestion) return;
+         const t = setTimeout(() => {
+             const questionText = getQuestionInstruction(currentQuestion, currentIndex + 1, total);
+@@ -233,7 +417,6 @@ export default function ExamView() {
+         return () => {
+             mountedRef.current = false;
+             stopTimer();
+-            stopGradingPoll();
+             clearTimeout(draftTimerRef.current);
+             clearTimeout(transitionTimerRef.current);
+             window.speechSynthesis?.cancel();
+@@ -253,7 +436,11 @@ export default function ExamView() {
+         draftInFlightRef.current = true;
+         try {
+             setSaveStatus('saving');
+-            await api.post(`/exam/${id}/submit`, { answers: nextAnswers, final: false });
++            await api.post(`/exam/${id}/submit`, {
++                answers: nextAnswers,
++                tab_violations: tabViolationsRef.current,
++                final: false,
++            });
+             draftDirtyRef.current = false;
+             setSaveStatus('saved');
+         } catch {
+@@ -272,6 +459,12 @@ export default function ExamView() {
+     const handleAnswerChange = useCallback((questionId, value) => {
+         if (!questionId) return;
+         const qKey = String(questionId);
++        setInterimTranscripts(prev => {
++            if (!(qKey in prev)) return prev;
++            const next = { ...prev };
++            delete next[qKey];
++            return next;
++        });
+         const prev = answersRef.current[qKey];
+         if (prev === value) return;
+ 
+@@ -315,6 +508,18 @@ export default function ExamView() {
+     const goPrev = useCallback(() => navigateTo(currentIndex - 1), [currentIndex, navigateTo]);
+     const jumpTo = useCallback((i) => navigateTo(i), [navigateTo]);
+ 
++    const displayAnswers = useMemo(() => {
++        if (!currentQuestion?._id) return answers;
++        const qId = String(currentQuestion._id);
++        const interim = String(interimTranscripts[qId] ?? '').trim();
++        if (!interim) return answers;
++        const base = String(answers[qId] ?? '').trim();
++        return {
++            ...answers,
++            [qId]: base ? `${base} ${interim}` : interim,
++        };
++    }, [answers, currentQuestion, interimTranscripts]);
++
+     // ΓöÇΓöÇ Voice controller (STT + intent dispatch) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     const {
+         voiceMode,
+@@ -329,12 +534,16 @@ export default function ExamView() {
+         currentIndex,
+         total,
+         readOnly,
++        showPlayback,
+         showReview,
+         showPanic,
+         secondsLeft,
+         speak,
+         cancel,
+-        onHelp: () => setShowPanic(true),
++        onHelp: () => {
++            stopListening();
++            setShowPanic(true);
++        },
+         onTimeRemaining: (s) => {
+             const secs = Math.max(0, Math.floor(Number(s || 0)));
+             const msg = `${Math.floor(secs / 60)} minutes and ${secs % 60} seconds remaining`;
+@@ -343,27 +552,32 @@ export default function ExamView() {
+         onSelectMCQ: (qId, letter) => {
+             handleAnswerChange(qId, letter);
+             // Always speak confirmation and auto-advance (voice-first behaviour)
+-            speak(`Option ${letter} selected. Moving to next question.`, {
++            speak(`Option ${letter} selected.`, {
+                 onEnd: () => {
+                     if (currentIndex < total - 1) {
+                         goNext();
+                     } else {
+-                        speak("You're on the last question. Opening review.");
+-                        setShowReview(true);
++                        openReviewPanel();
+                     }
+                 },
+             });
+         },
+         onNext: () => {
+             if (currentIndex >= total - 1) {
+-                speak("You're on the last question. Opening review and submit.");
+-                setShowReview(true);
++                openReviewPanel();
++                return;
++            }
++            goNext();
++        },
++        onSkip: () => {
++            if (currentIndex >= total - 1) {
++                speak("You're already on the last question.");
+                 return;
+             }
+             goNext();
+         },
+         onPrev: goPrev,
+-        onSubmit: () => setShowReview(true),
++        onSubmit: () => openReviewPanel(),
+         onClear: (qId) => handleAnswerChange(qId, ''),
+         onRepeat: (q, idx, t) => speak(getQuestionInstruction(q, idx + 1, t)),
+         onDictate: (qId, text) => {
+@@ -371,7 +585,30 @@ export default function ExamView() {
+             const merged = prevText ? `${prevText} ${text}` : text;
+             handleAnswerChange(qId, merged);
+         },
+-        onReview: () => setShowReview(true),
++        onInterimTranscript: (qId, text) => {
++            if (!qId) return;
++
++            const now = Date.now();
++            const isClear = !text;
++            if (!isClear && now - lastInterimUpdateAtRef.current < 180) return;
++            lastInterimUpdateAtRef.current = now;
++
++            setInterimTranscripts(prev => {
++                const qKey = String(qId);
++                if (!text) {
++                    if (!(qKey in prev)) return prev;
++                    const next = { ...prev };
++                    delete next[qKey];
++                    return next;
++                }
++                if (prev[qKey] === text) return prev;
++                return { ...prev, [qKey]: text };
++            });
++        },
++        onReview: () => {
++            playbackAutoOpenedRef.current = false;
++            openReviewPanel();
++        },
+         onReadOptions: (q) => {
+             if (!Array.isArray(q?.options) || q.options.length === 0) {
+                 speak('No options available for this question.');
+@@ -387,9 +624,8 @@ export default function ExamView() {
+         },
+         onResume: () => {
+             setShowPanic(false);
+-            speak('Resuming your exam.');
+-            // Re-engage mic after help closes
+             setTimeout(() => startListeningForCurrent(), 600);
++            speak('Resuming your exam.');
+         },
+         // ΓöÇΓöÇ Written-question voice commands ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+         onReadAnswer: (qId) => {
+@@ -418,6 +654,58 @@ export default function ExamView() {
+         onUndo: () => undoCurrent(),
+     });
+ 
++    const openReviewPanel = useCallback(() => {
++        if (playbackAutoOpenedRef.current) return;
++        playbackAutoOpenedRef.current = true;
++        stopListening();
++        speak(
++            'That was the last question. We are now moving to the review panel. '
++            + 'I will read each question and your answer one by one. '
++            + 'You can say next to continue, previous to go back, '
++            + 'change to update an answer, or skip all to go directly to submit.',
++            {
++            onEnd: () => {
++                console.log('[ExamView] setShowPlayback(true)');
++                setShowPlayback(true);
++            },
++            }
++        );
++        console.log('[ExamView] openReviewPanel called');
++    }, [speak, stopListening]);
++
++    const handlePlaybackClose = useCallback(() => {
++        setShowPlayback(false);
++        playbackAutoOpenedRef.current = false;
++        setTimeout(() => startListeningForCurrent(), 500);
++    }, [startListeningForCurrent]);
++
++    useEffect(() => {
++        examSpeechStateRef.current = {
++            ...examSpeechStateRef.current,
++            voiceMode,
++        };
++        stopListeningRef.current = stopListening;
++        startListeningRef.current = startListeningForCurrent;
++    }, [voiceMode, stopListening, startListeningForCurrent]);
++
++    useEffect(() => {
++        if (!pendingVoiceAutoStartSeq) return;
++        setVoiceMode(true);
++        startListeningForCurrent();
++    }, [pendingVoiceAutoStartSeq, setVoiceMode, startListeningForCurrent]);
++
++
++
++    const handlePanicOpen = useCallback(() => {
++        stopListening();
++        setShowPanic(true);
++    }, [stopListening]);
++
++    const handlePanicResume = useCallback(() => {
++        setShowPanic(false);
++        setTimeout(() => startListeningForCurrent(), 600);
++    }, [startListeningForCurrent]);
++
+ 
+     // ΓöÇΓöÇ Undo / Redo for current question ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     const canUndo = useMemo(() => {
+@@ -436,7 +724,6 @@ export default function ExamView() {
+         const qId = currentQuestion?._id != null ? String(currentQuestion._id) : null;
+         if (!qId) return;
+ 
+-        let nextAnswers = null;
+         setAnswerHistory(prevHist => {
+             const entry = prevHist[qId];
+             if (!entry || entry.past.length === 0) return prevHist;
+@@ -444,28 +731,26 @@ export default function ExamView() {
+             const newPast = entry.past.slice(0, -1);
+             const currentValue = answersRef.current[qId] ?? '';
+             const newFuture = [currentValue, ...(entry.future || [])];
+-            nextAnswers = { ...answersRef.current, [qId]: previousValue };
+-            return {
+-                ...prevHist,
+-                [qId]: { past: newPast, future: newFuture },
+-            };
+-        });
++            const nextAnswers = { ...answersRef.current, [qId]: previousValue };
+ 
+-        if (nextAnswers) {
+             answersRef.current = nextAnswers;
+             setAnswers(nextAnswers);
+             draftDirtyRef.current = true;
+             clearTimeout(draftTimerRef.current);
+             const delay = examType === 'writing-only' ? DRAFT_SAVE_DELAY_WRITTEN : DRAFT_SAVE_DELAY_MCQ;
+             draftTimerRef.current = setTimeout(() => saveDraft(nextAnswers), delay);
+-        }
++
++            return {
++                ...prevHist,
++                [qId]: { past: newPast, future: newFuture },
++            };
++        });
+     }, [currentQuestion, examType, saveDraft]);
+ 
+     const redoCurrent = useCallback(() => {
+         const qId = currentQuestion?._id != null ? String(currentQuestion._id) : null;
+         if (!qId) return;
+ 
+-        let nextAnswers = null;
+         setAnswerHistory(prevHist => {
+             const entry = prevHist[qId];
+             if (!entry || !entry.future || entry.future.length === 0) return prevHist;
+@@ -473,21 +758,20 @@ export default function ExamView() {
+             const newFuture = entry.future.slice(1);
+             const currentValue = answersRef.current[qId] ?? '';
+             const newPast = [...(entry.past || []), currentValue];
+-            nextAnswers = { ...answersRef.current, [qId]: nextValue };
+-            return {
+-                ...prevHist,
+-                [qId]: { past: newPast, future: newFuture },
+-            };
+-        });
++            const nextAnswers = { ...answersRef.current, [qId]: nextValue };
+ 
+-        if (nextAnswers) {
+             answersRef.current = nextAnswers;
+             setAnswers(nextAnswers);
+             draftDirtyRef.current = true;
+             clearTimeout(draftTimerRef.current);
+             const delay = examType === 'writing-only' ? DRAFT_SAVE_DELAY_WRITTEN : DRAFT_SAVE_DELAY_MCQ;
+             draftTimerRef.current = setTimeout(() => saveDraft(nextAnswers), delay);
+-        }
++
++            return {
++                ...prevHist,
++                [qId]: { past: newPast, future: newFuture },
++            };
++        });
+     }, [currentQuestion, examType, saveDraft]);
+ 
+     // ΓöÇΓöÇ Submission ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+@@ -503,26 +787,8 @@ export default function ExamView() {
+             }
+         }
+ 
+-        setSubmitting(true);
+-        setShowReview(false);
+-        stopTimer();
+-        stopGradingPoll();
+-
+-        try {
+-            await api.post(`/exam/${id}/submit`, {
+-                answers: answersRef.current,
+-                tab_violations: tabViolations,
+-                final: true,
+-            });
+-            setSubmitted(true);
+-            startGradingPoll();
+-        } catch (err) {
+-            if (mountedRef.current) {
+-                setError('Submission failed. Please try again.');
+-                setSubmitting(false);
+-            }
+-        }
+-    }, [id, submitting, submitted, questions]);
++        await submitExam();
++    }, [questions, submitExam, submitting, submitted]);
+ 
+     handleSubmitRef.current = handleSubmit;
+ 
+@@ -576,52 +842,6 @@ export default function ExamView() {
+         );
+     }
+ 
+-    // ΓöÇΓöÇ Grading complete screen ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+-    if (gradingStatus === 'graded') {
+-        return (
+-            <div className="min-h-screen flex flex-col items-center justify-center"
+-                style={{ background: 'var(--bg)', color: 'var(--text)', gap: 16 }}>
+-                <p style={{ fontSize: 36 }}>≡ƒÄë</p>
+-                <h1 style={{ fontSize: 26, fontWeight: 800, color: 'var(--success)' }}>
+-                    Exam Submitted & Graded
+-                </h1>
+-                <p style={{ color: 'var(--muted)' }}>Your results have been recorded.</p>
+-                <button
+-                    type="button"
+-                    onClick={() => navigate('/student')}
+-                    style={{
+-                        marginTop: 16,
+-                        padding: '12px 32px',
+-                        background: 'var(--accent)',
+-                        color: 'var(--bg)',
+-                        border: 'none',
+-                        borderRadius: 50,
+-                        fontWeight: 800,
+-                        fontSize: 15,
+-                        cursor: 'pointer',
+-                    }}
+-                >
+-                    Back to Dashboard
+-                </button>
+-            </div>
+-        );
+-    }
+-
+-    if (submitted && gradingStatus === 'grading') {
+-        return (
+-            <div className="min-h-screen flex flex-col items-center justify-center"
+-                style={{ background: 'var(--bg)', color: 'var(--text)', gap: 12 }}>
+-                <p style={{ fontSize: 32 }}>ΓÅ│</p>
+-                <h1 style={{ fontSize: 22, fontWeight: 800, color: 'var(--warn)' }}>
+-                    Grading in ProgressΓÇª
+-                </h1>
+-                <p style={{ color: 'var(--muted)' }}>
+-                    Your answers are being graded. You can safely close this page.
+-                </p>
+-            </div>
+-        );
+-    }
+-
+     // ΓöÇΓöÇ Submit button text / style ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     const submitText = answered === 0
+         ? 'Answer at least one question to submit'
+@@ -646,12 +866,15 @@ export default function ExamView() {
+     // ΓöÇΓöÇ Main render ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     return (
+         <div className="exam-root min-h-screen" style={{ background: 'var(--bg)', color: 'var(--text)' }}>
++            {showViolationModal && (
++                <ViolationModal onReturn={() => navigate('/student')} />
++            )}
+             <ExamTopBar
+                 title={exam?.title || 'Exam'}
+                 subtitle={paused ? 'Paused' : 'Voice-first exam mode'}
+                 timerText={secondsLeft === null ? '--:--:--' : formatHMS(secondsLeft)}
+                 isTimeCritical={isTimeCritical(secondsLeft ?? 0)}
+-                violationsCount={violations.length}
++                violationsCount={tabViolations}
+                 readingMode={readingMode}
+                 onToggleReadingMode={setReadingMode}
+                 mcqCount={counts?.mcq ?? 0}
+@@ -661,7 +884,7 @@ export default function ExamView() {
+                     setPaused(p => !p);
+                     stopListening();
+                 }}
+-                onHelp={() => setShowPanic(true)}
++                onHelp={handlePanicOpen}
+             />
+ 
+             <ExamSidebar
+@@ -685,7 +908,10 @@ export default function ExamView() {
+                 onNewStep={() => { /* TODO: wire math steps */ }}
+                 onUndo={undoCurrent}
+                 onRedo={redoCurrent}
+-                onReviewAll={() => setShowPlayback(true)}
++                onReviewAll={() => {
++                    playbackAutoOpenedRef.current = false;
++                    openReviewPanel();
++                }}
+                 onSubmit={() => setShowReview(true)}
+                 canUndo={canUndo}
+                 canRedo={canRedo}
+@@ -698,7 +924,7 @@ export default function ExamView() {
+                 total={total}
+                 answered={answered}
+                 pct={pct}
+-                answers={answers}
++                answers={displayAnswers}
+                 readOnly={readOnly}
+                 examType={examType}
+                 isListening={isListening}
+@@ -710,7 +936,7 @@ export default function ExamView() {
+                 onGoNext={goNext}
+                 onToggleVoiceMode={() => setVoiceMode(v => !v)}
+                 onStartListening={() => { setVoiceMode(true); startListeningForCurrent(); }}
+-                onOpenReview={() => setShowReview(true)}
++                onOpenReview={openReviewPanel}
+                 onAnswerChange={handleAnswerChange}
+                 onSpeak={speak}
+                 getQuestionInstruction={getQuestionInstruction}
+@@ -729,11 +955,7 @@ export default function ExamView() {
+                 <PanicHelp
+                     examType={examType}
+                     currentQuestion={currentQuestion}
+-                    onDismiss={() => {
+-                        setShowPanic(false);
+-                        // Re-engage mic after overlay closes
+-                        setTimeout(() => startListeningForCurrent(), 600);
+-                    }}
++                    onResume={handlePanicResume}
+                     speak={speak}
+                     cancel={cancel}
+                 />
+@@ -744,8 +966,16 @@ export default function ExamView() {
+                 <AnswerPlayback
+                     questions={questions}
+                     answers={answers}
+-                    onEdit={(index) => { setShowPlayback(false); setCurrentIndex(index); }}
+-                    onComplete={() => { setShowPlayback(false); setShowReview(true); }}
++                    onEdit={(index) => {
++                        handlePlaybackClose();
++                        setCurrentIndex(index);
++                    }}
++                    onComplete={() => {
++                        handlePlaybackClose();
++                        setShowReview(true);
++                    }}
++                    onUpdateAnswer={(qId, ans) => handleAnswerChange(qId, ans)}
++                    onClose={handlePlaybackClose}
+                     examType={examType}
+                     speak={speak}
+                     cancel={cancel}
+@@ -758,6 +988,8 @@ export default function ExamView() {
+                     questions={questions}
+                     answers={answers}
+                     unanswered={unanswered}
++                    speak={speak}
++                    cancel={cancel}
+                     onClose={() => setShowReview(false)}
+                     onEdit={(index) => { setCurrentIndex(index); setShowReview(false); }}
+                     onSubmit={handleSubmit}
+diff --git a/frontend/src/pages/StudentDashboard.jsx b/frontend/src/pages/StudentDashboard.jsx
+index 632d963..0b25d8b 100644
+--- a/frontend/src/pages/StudentDashboard.jsx
++++ b/frontend/src/pages/StudentDashboard.jsx
+@@ -1,15 +1,16 @@
+ import { useState, useEffect, useCallback, useRef } from 'react';
+ import { useNavigate } from 'react-router-dom';
+ import api from '../config/axios';
+-import Navbar from '../components/Navbar';
+ import useExamVoiceGuidance from '../hooks/useExamVoiceGuidance';
+ import StudentDashboardHeader from '../components/StudentDashboardHeader';
+ import StudentExamCard from '../components/StudentExamCard';
++import usePageTitle from '../hooks/usePageTitle';
+ 
+ // Γ£à Derive file-server origin from the centralized axios config (no hardcoded localhost)
+ const FILE_ORIGIN = (api.defaults.baseURL || '').replace(/\/api\/?$/, '');
+ 
+ export default function StudentDashboard() {
++    usePageTitle('Student Dashboard');
+     const [exams, setExams] = useState([]);
+     const [loading, setLoading] = useState(true);
+     const navigate = useNavigate();
+@@ -35,40 +36,139 @@ export default function StudentDashboard() {
+         fetchExams();
+     }, [fetchExams]);
+ 
++    useEffect(() => {
++        if (loading) return;
++        const count = exams.length;
++        const text = count > 0
++            ? `You are on the student dashboard. You have ${count} exam${count > 1 ? 's' : ''} available. Tap the mic button to hear them read aloud.`
++            : 'You are on the student dashboard. No exams are available right now.';
++        const t = setTimeout(() => {
++            try {
++                window.speechSynthesis.cancel();
++                window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
++            } catch {
++                // noop
++            }
++        }, 800);
++        return () => clearTimeout(t);
++    }, [loading]);
++
+     const navigateToExam = useCallback((exam) => {
+-        const examId = exam?._id;
+-        if (!examId) return;
++        const examId = typeof exam?._id === 'string'
++            ? exam._id
++            : exam?._id?.$oid
++            ?? exam?._id?.toString?.()
++            ?? exam?.id;
++
++        if (!examId) {
++            console.error('[StudentDashboard] Could not resolve exam ID from:', exam);
++            try {
++                window.speechSynthesis?.speak(
++                    new SpeechSynthesisUtterance(
++                        'Sorry, could not open that exam. Please try tapping the card.'
++                    )
++                );
++            } catch {
++                // noop
++            }
++            return;
++        }
+         // Route all exam modalities through the generic exam view.
+         // ExamView derives MCQ vs written vs mixed based on questions.
+         navigate(`/exam/${examId}`);
+     }, [navigate]);
+ 
+     const [isVoiceActive, setIsVoiceActive] = useState(false);
++    const [voiceIssue, setVoiceIssue] = useState(null);
++    const voiceIssueTimerRef = useRef(null);
++
++    const setVoiceIssueNotice = useCallback((issue) => {
++        setVoiceIssue(issue || null);
++        if (voiceIssueTimerRef.current) {
++            clearTimeout(voiceIssueTimerRef.current);
++            voiceIssueTimerRef.current = null;
++        }
++        if (issue) {
++            voiceIssueTimerRef.current = setTimeout(() => {
++                setVoiceIssue(null);
++                voiceIssueTimerRef.current = null;
++            }, 9000);
++        }
++    }, []);
+ 
+-    const { startVoiceGuidance } = useExamVoiceGuidance({
++    const { startVoiceGuidance, stopVoiceGuidance } = useExamVoiceGuidance({
+         exams,
+         onChooseExam: navigateToExam,
+-        autoStart: true,
++        autoStart: false,
+         isLoading: loading,
+         onVoiceStart: () => setIsVoiceActive(true),
+         onVoiceEnd: () => setIsVoiceActive(false),
++        onVoiceIssue: setVoiceIssueNotice,
+     });
+ 
++    const handleStartVoiceGuidance = useCallback((options) => {
++        setVoiceIssue(null);
++        startVoiceGuidance(exams, options);
++        setIsVoiceActive(true);
++    }, [exams, startVoiceGuidance]);
++
++    useEffect(() => {
++        return () => {
++            if (voiceIssueTimerRef.current) {
++                clearTimeout(voiceIssueTimerRef.current);
++                voiceIssueTimerRef.current = null;
++            }
++            try { window.speechSynthesis?.cancel(); } catch { /* noop */ }
++            stopVoiceGuidance?.();
++        };
++    }, [stopVoiceGuidance]);
++
++    const voiceIssueStyle = useCallback((level) => {
++        if (level === 'error') {
++            return {
++                border: '1.5px solid #ef4444',
++                background: '#fef2f2',
++                color: '#991b1b',
++            };
++        }
++        if (level === 'warning') {
++            return {
++                border: '1.5px solid #f59e0b',
++                background: '#fffbeb',
++                color: '#92400e',
++            };
++        }
++        return {
++            border: '1.5px solid #3b82f6',
++            background: '#eff6ff',
++            color: '#1e3a8a',
++        };
++    }, []);
++
+     return (
+-        <div
+-            className="min-h-screen"
+-            style={{ background: 'var(--bg)', color: 'var(--text)' }}
+-        >
+-            <Navbar />
+-            <div className="max-w-4xl mx-auto p-6">
++        <div className="max-w-4xl mx-auto p-6">
+                 <StudentDashboardHeader
+-                    onStartVoiceGuidance={() => {
+-                        startVoiceGuidance();
+-                        setIsVoiceActive(true);
+-                    }}
++                    onStartVoiceGuidance={handleStartVoiceGuidance}
+                     voiceActive={isVoiceActive}
+                 />
+ 
++                {voiceIssue?.message ? (
++                    <div
++                        role="status"
++                        aria-live="polite"
++                        style={{
++                            borderRadius: 10,
++                            padding: '10px 14px',
++                            marginBottom: 14,
++                            fontSize: 14,
++                            fontWeight: 600,
++                            ...voiceIssueStyle(voiceIssue.level),
++                        }}
++                    >
++                        {voiceIssue.message}
++                    </div>
++                ) : null}
++
+                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                     {exams.map((exam, index) => (
+                         <StudentExamCard
+@@ -80,12 +180,11 @@ export default function StudentDashboard() {
+                         />
+                     ))}
+                     {loading ? (
+-                        <p style={{ color: 'var(--muted)' }}>Loading exams...</p>
++                        <p role="status" aria-live="polite" style={{ color: 'var(--muted)' }}>Loading exams...</p>
+                     ) : exams.length === 0 ? (
+                         <p style={{ color: 'var(--muted)' }}>No exams available at the moment.</p>
+                     ) : null}
+                 </div>
+-            </div>
+         </div>
+     );
+ }
+diff --git a/frontend/src/pages/VoiceLogin.jsx b/frontend/src/pages/VoiceLogin.jsx
+index 0434181..8c9d0a2 100644
+--- a/frontend/src/pages/VoiceLogin.jsx
++++ b/frontend/src/pages/VoiceLogin.jsx
+@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext';
+ import { useNavigate } from 'react-router-dom';
+ import { Mic, Volume2 } from 'lucide-react';
+ import useTTS from '../hooks/useTTS';
++import usePageTitle from '../hooks/usePageTitle';
+ 
+ // ΓöÇΓöÇ Module-level text processing ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ // Γ£à Extracted from the component: these are pure functions with no dependency
+@@ -49,9 +50,32 @@ function processSpokenText(text, { digitsOnly = false, extraMap = {} } = {}) {
+ 
+ // Steps: 0=Idle  1=Listening ID  2=Listening PIN  3=Verifying
+ export default function VoiceLogin() {
++    usePageTitle('Student Login');
+     const { pinLogin } = useAuth();
+     const navigate = useNavigate();
+ 
++    useEffect(() => {
++        const announce = () => {
++            window.speechSynthesis.cancel();
++            const u = new SpeechSynthesisUtterance(
++                'Welcome to Saarthi. You are on the voice login page. '
++                + 'Please say your student ID to begin.'
++            );
++            window.speechSynthesis.speak(u);
++            document.removeEventListener('click', announce);
++            document.removeEventListener('keydown', announce);
++            document.removeEventListener('touchstart', announce);
++        };
++        document.addEventListener('click', announce);
++        document.addEventListener('keydown', announce);
++        document.addEventListener('touchstart', announce);
++        return () => {
++            document.removeEventListener('click', announce);
++            document.removeEventListener('keydown', announce);
++            document.removeEventListener('touchstart', announce);
++        };
++    }, []);
++
+     const [step, setStep] = useState(0);
+     const stepRef = useRef(0);
+     const [status, setStatus] = useState('Welcome to Saarthi. Click start to login.');
+@@ -71,6 +95,18 @@ export default function VoiceLogin() {
+ 
+     // Processing lock so TTS and Mic don't collide, and to handle state correctly
+     const processingRef = useRef(false);
++    const listenStartRef = useRef(0);
++    const heardResultRef = useRef(false);
++    const noSpeechHandledRef = useRef(false);
++    const startListeningRef = useRef(() => { });
++
++    // Cancel any lingering TTS on mount/unmount so voice login starts clean.
++    useEffect(() => {
++        window.speechSynthesis?.cancel();
++        return () => {
++            window.speechSynthesis?.cancel();
++        };
++    }, []);
+ 
+     // Sync state with ref
+     useEffect(() => { stepRef.current = step; }, [step]);
+@@ -91,7 +127,10 @@ export default function VoiceLogin() {
+             utterance.onend = () => { clearTimeout(fallback); utteranceRef.current = null; resolve(); };
+             utterance.onerror = (e) => {
+                 clearTimeout(fallback);
+-                console.error('TTS error:', e);
++                // interrupted/canceled is expected when we cancel TTS ΓÇö don't log it as error
++                if (e.error !== 'interrupted' && e.error !== 'canceled') {
++                    console.error('TTS error:', e);
++                }
+                 utteranceRef.current = null;
+                 resolve();
+             };
+@@ -118,14 +157,39 @@ export default function VoiceLogin() {
+         []
+     );
+ 
++    const startSTTAfterTTS = useCallback((startFn) => {
++        const runStart = () => {
++            window.speechSynthesis?.cancel();
++            setTimeout(startFn, 300);
++        };
++
++        if (window.speechSynthesis?.speaking) {
++            const poll = setInterval(() => {
++                if (!window.speechSynthesis.speaking) {
++                    clearInterval(poll);
++                    setTimeout(runStart, 500);
++                }
++            }, 200);
++        } else {
++            runStart();
++        }
++    }, []);
++
++    const scheduleRestart = useCallback((delayMs = 500) => {
++        setTimeout(() => {
++            if (!processingRef.current && (stepRef.current === 1 || stepRef.current === 2)) {
++                startListeningRef.current?.();
++            }
++        }, delayMs);
++    }, []);
++
+     // ΓöÇΓöÇ Recognition session management ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+-    const startListening = useCallback(() => {
++    const startRecognitionCore = useCallback(() => {
+         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+         if (!SpeechRecognition) {
+             setStatus('Voice recognition not supported. Please use the manual login.');
+             return;
+         }
+-
+         // Abort existing session before opening a new one
+         if (recognitionRef.current) {
+             try { recognitionRef.current.abort(); } catch { /* ignore */ }
+@@ -137,48 +201,90 @@ export default function VoiceLogin() {
+         recognition.lang = 'en-US';
+         recognitionRef.current = recognition;
+ 
++        // Track this listening session so we only say "didn't hear" after enough wait.
++        listenStartRef.current = Date.now();
++        heardResultRef.current = false;
++        noSpeechHandledRef.current = false;
++
++        // Keep the mic open long enough before forcing an end cycle.
++        const maxListenTimer = setTimeout(() => {
++            if (recognitionRef.current === recognition) {
++                try { recognition.stop(); } catch { /* ignore */ }
++            }
++        }, 10000);
++
+         recognition.onstart = () => setIsListening(true);
+ 
+         recognition.onresult = (event) => {
++            heardResultRef.current = true;
+             const transcript = event.results[0][0].transcript;
+             if (handleInputRef.current) handleInputRef.current(transcript);
+         };
+ 
+         recognition.onerror = async (event) => {
++            if (event.error === 'aborted') return; // Intentional stop/abort ΓÇö do not restart.
++
+             if (event.error === 'not-allowed') {
++                clearTimeout(maxListenTimer);
+                 setStatus('Microphone access denied. Please allow microphone access or use manual login.');
+                 setStep(0);
+                 stepRef.current = 0;
+             } else if (event.error === 'no-speech') {
+-                // Silently ignore "no-speech" errors so the background loop can seamlessly reboot it in onend
+-                // without harassing the user with "I didn't hear anything" every 10 seconds.
++                // Restart silently for no-speech so we don't spam prompts.
++                clearTimeout(maxListenTimer);
++                noSpeechHandledRef.current = true;
++                scheduleRestart(500);
+             } else {
++                clearTimeout(maxListenTimer);
+                 if (processingRef.current || stepRef.current === 0) return;
+                 console.error('Speech recognition error:', event.error);
+                 processingRef.current = true;
+-                await speak("I didn't hear anything clearly. Please try again.");
++                await speak('There was a microphone error. Please try again.');
+                 processingRef.current = false;
+-                setTimeout(startListening, 200);
++                scheduleRestart(200);
+             }
+         };
+ 
+-        recognition.onend = () => {
++        recognition.onend = async () => {
++            clearTimeout(maxListenTimer);
+             if (recognitionRef.current === recognition) {
+                 setIsListening(false);
+             }
+-            // Auto-restart listening if we are still securely in listening mode but the session timed out
+-            if (!processingRef.current && (stepRef.current === 1 || stepRef.current === 2) && recognitionRef.current === recognition) {
+-                setTimeout(() => {
+-                    if (!processingRef.current && (stepRef.current === 1 || stepRef.current === 2)) {
+-                        startListening();
+-                    }
+-                }, 300);
++
++            if (processingRef.current || !(stepRef.current === 1 || stepRef.current === 2)) return;
++
++            // no-speech already handled in onerror; skip duplicate onend handling.
++            if (noSpeechHandledRef.current) {
++                noSpeechHandledRef.current = false;
++                return;
+             }
++
++            if (!heardResultRef.current) {
++                const elapsed = Date.now() - listenStartRef.current;
++                if (elapsed < 8000) {
++                    scheduleRestart(500);
++                    return;
++                }
++
++                processingRef.current = true;
++                await speak("I didn't hear anything clearly. Please try again.");
++                processingRef.current = false;
++                scheduleRestart(1500);
++                return;
++            }
++
++            // Normal end after a recognized result: keep listening flow alive quietly.
++            scheduleRestart(300);
+         };
+ 
+         recognition.start();
+         setStatus('Listening...');
+-    }, [speak]);
++    }, [scheduleRestart, speak]);
++
++    const startListening = useCallback(() => {
++        startSTTAfterTTS(startRecognitionCore);
++    }, [startRecognitionCore, startSTTAfterTTS]);
++    startListeningRef.current = startListening;
+ 
+     // ΓöÇΓöÇ Input handler (voice flow logic) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     const handleInput = useCallback(async (text) => {
+@@ -209,13 +315,13 @@ export default function VoiceLogin() {
+             const rawDigits = processPinText(text);
+ 
+             if (rawDigits.length < 4) {
+-                await speak(`PIN must be 4 digits. I heard ${rawDigits.length} digit${rawDigits.length === 1 ? '' : 's'}. Please try again.`);
++                await speak(`PIN must be 4 to 6 digits. I heard ${rawDigits.length} digit${rawDigits.length === 1 ? '' : 's'}. Please try again.`);
+                 processingRef.current = false;
+                 startListening();
+                 return;
+             }
+-            if (rawDigits.length > 4) {
+-                await speak(`That sounded like more than 4 digits. Please say each digit individually.`);
++            if (rawDigits.length > 6) {
++                await speak(`That sounded like more than 6 digits. Please say each digit individually.`);
+                 processingRef.current = false;
+                 startListening();
+                 return;
+@@ -241,13 +347,32 @@ export default function VoiceLogin() {
+         if (res.success) {
+             await speak('Login successful. Redirecting.');
+             navigate('/student');
+-        } else {
+-            await speak('Login failed. Please try again.');
+-            setStudentId('');
+-            setPin('');
+-            setStep(0);
+-            stepRef.current = 0;
++            return;
+         }
++
++        const code = res.code;
++        let message = 'Login failed. Please check your credentials and try again.';
++        if (code === 'STUDENT_NOT_FOUND') {
++            message = 'Student ID not found. Please check your Student ID and try again.';
++        } else if (code === 'WRONG_PIN') {
++            message = 'Incorrect PIN. Please try again.';
++        } else if (code === 'ACCOUNT_LOCKED') {
++            message = 'Your account is temporarily locked due to too many failed attempts. Please try again later.';
++            if (res.locked_until) {
++                message = `${message} Locked until ${res.locked_until}.`;
++            }
++        } else if (code === 'ACCOUNT_INACTIVE') {
++            message = 'Your account is not active. Please contact your administrator.';
++        } else if (code === 'RATE_LIMITED') {
++            message = 'Too many login attempts. Please wait a moment before trying again.';
++        }
++
++        setStatus(message);
++        await speak(message);
++        setStudentId('');
++        setPin('');
++        setStep(0);
++        stepRef.current = 0;
+     }, [pinLogin, speak, navigate]);
+ 
+     // ΓöÇΓöÇ Start voice flow ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+@@ -385,8 +510,8 @@ export default function VoiceLogin() {
+                         />
+                         <input
+                             type="password"
+-                            placeholder="4-digit PIN"
+-                            maxLength="4"
++                            placeholder="4-6 digit PIN"
++                            maxLength="6"
+                             className="w-full p-2 border rounded mb-4"
+                             style={{ background: 'var(--card)', borderColor: 'var(--border)', color: 'var(--text)' }}
+                             value={pin}

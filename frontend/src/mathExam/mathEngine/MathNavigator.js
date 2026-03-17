@@ -26,6 +26,7 @@ export const getNodeAtPath = (ast, path) => {
 export const setNodeAtPath = (ast, path, newNode) => {
     if (path.length === 0) return newNode;
     const [head, ...tail] = path;
+    if (!ast || typeof ast !== 'object') return ast;
     const result = { ...ast };
     // Walk and rebuild the parent chain immutably
     if (tail.length === 0) {

@@ -22,6 +22,9 @@ export class BrowserSTT extends SpeechProvider {
         this._onResult = null;
         this._onError = null;
         this._stopTimeout = null;
+        this._stitchTimer = null;
+        this._partialBuffer = '';
+        this._minConfidence = null;
         this._continuous = options.continuous ?? false;
         this._autoRestart = options.autoRestart ?? false;
 
@@ -55,6 +58,12 @@ export class BrowserSTT extends SpeechProvider {
     }
 
     stopListening() {
+        if (this._stitchTimer) {
+            clearTimeout(this._stitchTimer);
+            this._stitchTimer = null;
+        }
+        this._partialBuffer = '';
+
         // ✅ Set the stop flag FIRST so any pending deferred restart callbacks
         // see it and exit immediately — even if they were queued milliseconds ago.
         this._stopped = true;
@@ -62,6 +71,7 @@ export class BrowserSTT extends SpeechProvider {
         this._retryCount = 0;
 
         this._clearStopTimeout();
+        this._minConfidence = null;
 
         if (this._recognition) {
             try { this._recognition.abort(); } catch { /* ignore */ }
@@ -94,19 +104,19 @@ export class BrowserSTT extends SpeechProvider {
         const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
         const recognition = new SR();
         recognition.lang = this.lang;
-        recognition.continuous = this._continuous;
-        recognition.interimResults = false;
+        recognition.continuous = this._continuous ?? false;
+        recognition.interimResults = this._continuous ? true : false;
         recognition.maxAlternatives = 3;
         this._recognition = recognition;
 
-        // ✅ 12-second hard-stop zombie killer.
+        // ✅ 90-second hard-stop zombie killer.
         // NOT cleared on onresult — only cleared when the session actually ends
         // (onend) or when stopListening is called. This ensures the timeout is
         // always active while a session is running, even after results come in.
         this._clearStopTimeout();
         this._stopTimeout = setTimeout(() => {
             try { this._recognition?.stop(); } catch { /* ignore */ }
-        }, 12000);
+        }, 90000);
 
         // ── Handlers ────────────────────────────────────────────────────────────
 
@@ -117,12 +127,27 @@ export class BrowserSTT extends SpeechProvider {
 
         recognition.onresult = (event) => {
             this._retryCount = 0;
-            const result = event.results[event.results.length - 1];
-            const transcript = result[0].transcript;
-            const confidence = result[0].confidence;
-            // ✅ Do NOT clearStopTimeout here — the session is still running.
-            // The timeout must stay armed until the session actually ends.
-            this._onResult?.({ transcript, confidence, raw: event });
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+                if (event.results[i].isFinal) {
+                    const transcript = event.results[i][0].transcript;
+                    const chunkConfidence = event.results[i][0].confidence;
+                    
+                    const isFirstChunk = !this._partialBuffer;
+                    this._partialBuffer = (this._partialBuffer || '') + ' ' + transcript;
+                    this._minConfidence = isFirstChunk ? chunkConfidence : Math.min(this._minConfidence || 1.0, chunkConfidence);
+
+                    clearTimeout(this._stitchTimer);
+                    this._stitchTimer = setTimeout(() => {
+                        const full = this._partialBuffer.trim();
+                        const finalConfidence = this._minConfidence || 0;
+                        this._partialBuffer = '';
+                        this._minConfidence = null;
+                        if (full) {
+                            this._onResult?.({ transcript: full, confidence: finalConfidence, raw: event });
+                        }
+                    }, 1500);
+                }
+            }
         };
 
         // ✅ onerror owns the retry decision. onend is prevented from also

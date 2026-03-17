@@ -32,12 +32,13 @@ import { EMPTY } from '../mathEngine/MathAST.js';
 
 const stt = new BrowserSTT({ continuous: false, maxRetries: 3 });
 
-export const useVoiceController = ({ onSubmit } = {}) => {
+export const useVoiceController = ({ onSubmit, exams_questions = [] } = {}) => {
     const dispatch = useDispatch();
     const tts = getTTS();
 
     const { steps, currentStepIndex, cursor, verbosityMode, inputMode, pendingConfirmation } =
         useSelector(s => s.mathExam);
+    const questionIndex = useSelector(s => s.examSession?.questionIndex || 0);
 
     // Keep refs to avoid stale closures inside STT callbacks
     const stepsRef = useRef(steps);
@@ -45,9 +46,13 @@ export const useVoiceController = ({ onSubmit } = {}) => {
     const verbosityRef = useRef(verbosityMode);
     const inputModeRef = useRef(inputMode);
     const pendingRef = useRef(pendingConfirmation);
+    const questionsRef = useRef(exams_questions);
+    const questionIndexRef = useRef(questionIndex);
 
     useEffect(() => { stepsRef.current = steps; }, [steps]);
     useEffect(() => { cursorRef.current = cursor; }, [cursor]);
+    useEffect(() => { questionsRef.current = exams_questions; }, [exams_questions]);
+    useEffect(() => { questionIndexRef.current = questionIndex; }, [questionIndex]);
     useEffect(() => { verbosityRef.current = verbosityMode; }, [verbosityMode]);
     useEffect(() => { inputModeRef.current = inputMode; }, [inputMode]);
     useEffect(() => { pendingRef.current = pendingConfirmation; }, [pendingConfirmation]);
@@ -76,9 +81,26 @@ export const useVoiceController = ({ onSubmit } = {}) => {
         }
     }, [readStep]);
 
+    // ─── Read current exam question ────────────────────────────────────────────
+    const readCurrentQuestion = useCallback(async () => {
+        const questions = questionsRef.current;
+        const idx = questionIndexRef.current;
+        if (!questions || !Array.isArray(questions) || questions.length === 0) {
+            await say('No questions available.');
+            return;
+        }
+        if (idx >= questions.length) {
+            await say(`Question ${idx + 1} not found.`);
+            return;
+        }
+        const q = questions[idx];
+        const text = `Question ${idx + 1}. ${q.text}. Worth ${q.marks || 0} marks.`;
+        await say(text);
+    }, [say]);
+
     // ─── Main command dispatcher ───────────────────────────────────────────────
     const handleCommand = useCallback(async (cmd) => {
-        const { type, payload } = cmd;
+        const { type, payload, originalText } = cmd;
         const steps = stepsRef.current;
         const cursor = cursorRef.current;
         const currentAST = steps[cursor.stepIndex]?.ast || EMPTY;
@@ -198,7 +220,12 @@ export const useVoiceController = ({ onSubmit } = {}) => {
 
             // ── Reading ───────────────────────────────────────────────────────────
             case CMD.READ_BRIEF:
-                await readStep(cursor.stepIndex, { verbosity: 'brief' });
+                // If the student said "read question", read the exam question
+                if (originalText && originalText.toLowerCase().includes('question')) {
+                    await readCurrentQuestion();
+                } else {
+                    await readStep(cursor.stepIndex, { verbosity: 'brief' });
+                }
                 break;
 
             case CMD.READ_DETAILED:
@@ -372,19 +399,18 @@ export const useVoiceController = ({ onSubmit } = {}) => {
                 return;
             }
 
-            // In command mode, parse everything as a command
-            // In dictation mode, first check if it's a mode-switch command
+            // Parse command first
             const cmd = parseCommand(transcript, confidence);
 
-            // Always allow mode-switch regardless of current mode
-            if (
-                cmd.type === CMD.ENTER_COMMAND_MODE ||
-                cmd.type === CMD.EXIT_COMMAND_MODE ||
-                inputModeRef.current === 'command'
-            ) {
+            // If it's a recognized command (not MATH_INPUT), execute it regardless of mode
+            // This allows students to use commands like "read all steps" anytime
+            if (cmd.type !== CMD.MATH_INPUT) {
+                await handleCommand(cmd);
+            } else if (inputModeRef.current === 'command') {
+                // In command mode, handle MATH_INPUT as a potential command too
                 await handleCommand(cmd);
             } else {
-                // Dictation mode: treat as math input directly
+                // In dictation mode with unrecognized input: treat as math dictation
                 await handleCommand({ type: CMD.MATH_INPUT, payload: { text: transcript }, originalText: transcript });
             }
         } finally {
@@ -431,6 +457,7 @@ export const useVoiceController = ({ onSubmit } = {}) => {
         say,
         readStep,
         readAll,
+        readCurrentQuestion,
         handleCommand,
         isSupported: stt.isSupported,
     };

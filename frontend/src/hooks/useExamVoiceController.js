@@ -4,6 +4,8 @@ import { parseVoiceCommand, VOICE_INTENT } from '../utils/voiceCommands';
 import { getVoiceGrammarMode } from '../utils/examConfig';
 import { handleVoiceIntent } from '../utils/handleVoiceIntent';
 
+const MIN_RESTART_INTERVAL_MS = 200;
+
 /**
  * Centralizes exam STT lifecycle + intent dispatch.
  * UI can pass callbacks to keep business logic decoupled from the view.
@@ -14,6 +16,8 @@ export default function useExamVoiceController({
     currentIndex,
     total,
     readOnly,
+    showPlayback,
+    showPlaybackRef,
     showReview,
     showPanic,
     secondsLeft,
@@ -23,11 +27,13 @@ export default function useExamVoiceController({
     onTimeRemaining,
     onSelectMCQ,
     onNext,
+    onSkip,
     onPrev,
     onSubmit,
     onClear,
     onRepeat,
     onDictate,
+    onInterimTranscript,
     onReview,
     onReadOptions,
     onResume,
@@ -51,10 +57,22 @@ export default function useExamVoiceController({
     const autoStartTimerRef = useRef(null);
     const consecutiveErrorsRef = useRef(0);
     const retryTimerRef = useRef(null);
+    const restartDeafUntilRef = useRef(0);
+    const shouldBeListeningRef = useRef(false);
+    const isSpeakingRef = useRef(false);
+    const ttsWaitIntervalRef = useRef(null);
+    const ttsDeferredStartTimerRef = useRef(null);
 
     useEffect(() => { currentQuestionRef.current = currentQuestion; }, [currentQuestion]);
     useEffect(() => { indexRef.current = currentIndex; }, [currentIndex]);
     useEffect(() => { secondsLeftRef.current = secondsLeft; }, [secondsLeft]);
+
+    useEffect(() => {
+        const id = setInterval(() => {
+            isSpeakingRef.current = !!window.speechSynthesis?.speaking;
+        }, 120);
+        return () => clearInterval(id);
+    }, []);
 
     useEffect(() => {
         // Keep UI indicator aligned with the most recent question when idle.
@@ -72,18 +90,21 @@ export default function useExamVoiceController({
     // Stability refs for external callbacks to prevent infinite re-renders
     const callbacksRef = useRef({
         speak, cancel, onHelp, onTimeRemaining, onSelectMCQ, onNext, onPrev,
-        onSubmit, onClear, onRepeat, onDictate, onReview, onReadOptions, onResume,
+        onSkip,
+        onSubmit, onClear, onRepeat, onDictate, onInterimTranscript, onReview, onReadOptions, onResume,
         onReadAnswer, onCreateStep, onClearStep, onUndo,
     });
     useEffect(() => {
         callbacksRef.current = {
             speak, cancel, onHelp, onTimeRemaining, onSelectMCQ, onNext, onPrev,
-            onSubmit, onClear, onRepeat, onDictate, onReview, onReadOptions, onResume,
+            onSkip,
+            onSubmit, onClear, onRepeat, onDictate, onInterimTranscript, onReview, onReadOptions, onResume,
             onReadAnswer, onCreateStep, onClearStep, onUndo,
         };
     });
 
     const stopListening = useCallback(() => {
+        shouldBeListeningRef.current = false;
         sessionRef.current += 1; // invalidate any in-flight callbacks
         lastStopAtRef.current = Date.now();
         if (startTimerRef.current) {
@@ -98,6 +119,14 @@ export default function useExamVoiceController({
             clearTimeout(retryTimerRef.current);
             retryTimerRef.current = null;
         }
+        if (ttsWaitIntervalRef.current) {
+            clearInterval(ttsWaitIntervalRef.current);
+            ttsWaitIntervalRef.current = null;
+        }
+        if (ttsDeferredStartTimerRef.current) {
+            clearTimeout(ttsDeferredStartTimerRef.current);
+            ttsDeferredStartTimerRef.current = null;
+        }
         if (activeRecRef.current) {
             try { activeRecRef.current.abort(); } catch { /* noop */ }
             activeRecRef.current = null;
@@ -106,24 +135,47 @@ export default function useExamVoiceController({
         setIsListening(false);
     }, [stopRecognitionOnly]);
 
-    const startListeningForCurrent = useCallback(() => {
+    const startListeningForCurrent = useCallback((options = {}) => {
+        const bypassMinRestart = !!options.bypassMinRestart;
+        const restartDeafMs = Number(options.restartDeafMs || 0);
+        if (restartDeafMs > 0) {
+            restartDeafUntilRef.current = Date.now() + restartDeafMs;
+        }
+        if (!voiceMode) return;
+        // Don't start STT during playback, review, panic, or read-only states.
+        const isPlaybackOpen = showPlaybackRef?.current ?? showPlayback;
+        if (isPlaybackOpen || showReview || showPanic || readOnly) return;
+        // Never start STT while TTS is speaking — would cancel speech.
+        if (window.speechSynthesis?.speaking || window.speechSynthesis?.pending) return;
+
         if (startTimerRef.current) {
             clearTimeout(startTimerRef.current);
             startTimerRef.current = null;
         }
 
         const q = currentQuestionRef.current;
-        if (!q || showReview || readOnly || showPanic) return;
+        if (!q) return;
         if (activeRecRef.current) return; // already listening/starting
 
+        const msSinceStop = Date.now() - lastStopAtRef.current;
+        if (!bypassMinRestart && msSinceStop < MIN_RESTART_INTERVAL_MS) {
+            const waitMs = MIN_RESTART_INTERVAL_MS - msSinceStop;
+            startTimerRef.current = setTimeout(() => {
+                startTimerRef.current = null;
+                startListeningForCurrent();
+            }, waitMs);
+            return;
+        }
+
         stopListening();
+        shouldBeListeningRef.current = true;
 
         const sessionId = (sessionRef.current += 1);
         const localGrammarMode = getVoiceGrammarMode(examType, q);
         setActiveGrammarMode(localGrammarMode);
         const startedQuestionId = q?._id != null ? String(q._id) : '';
         const startedQuestionType = q?.type;
-        const cooldownMs = Math.max(0, 250 - (Date.now() - lastStopAtRef.current));
+        const cooldownMs = Math.max(0, 200 - (Date.now() - lastStopAtRef.current));
 
         startTimerRef.current = setTimeout(() => {
             if (sessionId !== sessionRef.current) return;
@@ -137,13 +189,39 @@ export default function useExamVoiceController({
 
             const handleResult = async (event) => {
                 if (sessionId !== sessionRef.current) return;
-                const transcriptRaw = String(event?.results?.[0]?.[0]?.transcript ?? '').trim();
+                if (Date.now() < restartDeafUntilRef.current) return;
+
+                let interim = '';
+                let finalText = '';
+                let recognitionConfidence = 0;
+
+                for (let i = event.resultIndex; i < event.results.length; i++) {
+                    if (event.results[i].isFinal) {
+                        recognitionConfidence = Math.max(
+                            recognitionConfidence,
+                            Number(event.results[i][0]?.confidence ?? 0)
+                        );
+                        finalText += ` ${String(event.results[i][0].transcript || '')}`;
+                    } else {
+                        interim += ` ${String(event.results[i][0].transcript || '')}`;
+                    }
+                }
+
+                const interimText = interim.trim();
+                if (startedQuestionId && callbacksRef.current.onInterimTranscript) {
+                    callbacksRef.current.onInterimTranscript(startedQuestionId, interimText);
+                }
+
+                const transcriptRaw = finalText.trim();
                 if (!transcriptRaw) return;
-                const transcript = transcriptRaw.toLowerCase();
 
                 if (!startedQuestionId) return;
                 const liveId = currentQuestionRef.current?._id != null ? String(currentQuestionRef.current._id) : '';
                 if (liveId && liveId !== startedQuestionId) return;
+
+                if (callbacksRef.current.onInterimTranscript) {
+                    callbacksRef.current.onInterimTranscript(startedQuestionId, '');
+                }
 
                 handleVoiceIntent({
                     transcriptRaw,
@@ -155,40 +233,100 @@ export default function useExamVoiceController({
                     total,
                     secondsLeftRef,
                     callbacksRef,
-                    stopListening
+                    stopListening,
+                    recognitionConfidence,
                 });
             };
 
             const handleError = (event) => {
                 if (sessionId !== sessionRef.current) return;
 
-                if (event.error === 'no-speech') return;
+                const errorCode = String(event?.error || '').toLowerCase();
 
-                console.warn(`[Exam STT] error: ${event.error}`);
+                if (errorCode === 'no-speech') {
+                    // Silent restart path: keep listening UI stable and let onend restart quickly.
+                    activeRecRef.current = null;
+                    return;
+                }
+
+                if (errorCode === 'aborted') {
+                    activeRecRef.current = null;
+                    return;
+                }
+
                 setIsListening(false);
                 activeRecRef.current = null;
-                consecutiveErrorsRef.current += 1;
+                lastStopAtRef.current = Date.now();
 
-                if (event.error !== 'not-allowed' && consecutiveErrorsRef.current < 3) {
-                    setTimeout(() => startListeningForCurrent(), 500 * consecutiveErrorsRef.current);
-                } else if (consecutiveErrorsRef.current >= 3) {
-                    console.error('[Exam STT] Stopping mic due to consecutive errors.');
-                    stopListening();
+                if (
+                    errorCode === 'not-allowed'
+                    || errorCode === 'audio-capture'
+                    || errorCode === 'network'
+                ) {
+                    console.warn(`[Exam STT] error: ${errorCode}`);
+                }
+
+                if (errorCode === 'not-allowed') {
+                    shouldBeListeningRef.current = false;
+                    setIsListening(false);
+                    callbacksRef.current.speak?.(
+                        'Microphone access was denied. Please enable microphone permissions and reload the page.'
+                    );
+                } else {
+                    consecutiveErrorsRef.current += 1;
+                    if (consecutiveErrorsRef.current >= 3) {
+                        shouldBeListeningRef.current = false;
+                        setIsListening(false);
+                    }
                 }
             };
 
             const handleEnd = () => {
                 if (sessionId !== sessionRef.current) return;
 
-                if (activeRecRef.current === rec) {
-                    setIsListening(false);
-                    activeRecRef.current = null;
+                if (activeRecRef.current !== rec && activeRecRef.current !== null) return;
 
-                    if (voiceMode && !showReview && !showPanic && consecutiveErrorsRef.current < 3) {
-                        const delay = 500 * (consecutiveErrorsRef.current + 1);
-                        setTimeout(() => startListeningForCurrent(), delay);
-                    }
+                activeRecRef.current = null;
+                lastStopAtRef.current = Date.now();
+                const isPlaybackOpen = showPlaybackRef?.current ?? showPlayback;
+
+                if (!voiceMode || showReview || showPanic || isPlaybackOpen || readOnly) {
+                    setIsListening(false);
+                    return;
                 }
+
+                if (!shouldBeListeningRef.current) {
+                    setIsListening(false);
+                    return;
+                }
+
+                if (consecutiveErrorsRef.current >= 3) {
+                    setIsListening(false);
+                    return;
+                }
+
+                if (isSpeakingRef.current) {
+                    return;
+                }
+
+                // Keep isListening=true through quick restart so mic UI doesn't flicker.
+                if (retryTimerRef.current) {
+                    clearTimeout(retryTimerRef.current);
+                }
+                retryTimerRef.current = setTimeout(() => {
+                    retryTimerRef.current = null;
+                    if (sessionId !== sessionRef.current) return;
+                    const isPlaybackOpenNow = showPlaybackRef?.current ?? showPlayback;
+                    if (isPlaybackOpenNow) {
+                        setIsListening(false);
+                        return;
+                    }
+                    if (!shouldBeListeningRef.current) {
+                        setIsListening(false);
+                        return;
+                    }
+                    startListeningForCurrent({ bypassMinRestart: true });
+                }, 150);
             };
 
             rec.onresult = handleResult;
@@ -201,6 +339,7 @@ export default function useExamVoiceController({
             }
 
             try {
+                shouldBeListeningRef.current = true;
                 rec.start();
                 setIsListening(true);
                 consecutiveErrorsRef.current = 0;
@@ -210,11 +349,12 @@ export default function useExamVoiceController({
                 setIsListening(false);
                 consecutiveErrorsRef.current += 1;
             }
-        }, Math.max(200, cooldownMs));
+        }, cooldownMs);
     }, [
         createRecognition,
         examType,
         readOnly,
+        showPlayback,
         showReview,
         showPanic,
         stopListening,
@@ -224,10 +364,14 @@ export default function useExamVoiceController({
 
     // Auto-(re)start listening when in voice mode
     useEffect(() => {
-        if (!voiceMode || showReview || showPanic) return undefined;
+        const isPlaybackOpen = showPlaybackRef?.current ?? showPlayback;
+        if (!voiceMode || showReview || showPanic || isPlaybackOpen) return undefined;
         if (autoStartTimerRef.current) clearTimeout(autoStartTimerRef.current);
         autoStartTimerRef.current = setTimeout(() => startListeningForCurrent(), 300);
         return () => { stopListening(); };
+        // showPlayback intentionally omitted — guarded via
+        // showPlaybackRef.current to prevent cancellation race
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [voiceMode, currentIndex, showReview, showPanic, startListeningForCurrent, stopListening]);
 
     // Cleanup on unmount
@@ -240,6 +384,14 @@ export default function useExamVoiceController({
             if (autoStartTimerRef.current) {
                 clearTimeout(autoStartTimerRef.current);
                 autoStartTimerRef.current = null;
+            }
+            if (ttsWaitIntervalRef.current) {
+                clearInterval(ttsWaitIntervalRef.current);
+                ttsWaitIntervalRef.current = null;
+            }
+            if (ttsDeferredStartTimerRef.current) {
+                clearTimeout(ttsDeferredStartTimerRef.current);
+                ttsDeferredStartTimerRef.current = null;
             }
             stopListening();
         };

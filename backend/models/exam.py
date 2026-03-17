@@ -1,5 +1,5 @@
 from bson import ObjectId
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class Question:
@@ -12,7 +12,7 @@ class Question:
     def __init__(self, text, q_type, options=None, correct_answer=None, marks=1, id=None, grading_config=None):
         self.id = ObjectId(id) if id else ObjectId()
         self.text = text
-        self.type = q_type  # 'text', 'mcq', 'voice'
+        self.type = q_type  # 'text', 'mcq'
         self.options = options or []
         self.correct_answer = correct_answer
         self.marks = marks
@@ -67,7 +67,7 @@ class Exam:
         ]
         self.file_url = file_url
         self.examType = examType
-        self.created_at = datetime.utcnow()
+        self.created_at = datetime.now(timezone.utc)
 
     def to_dict(self):
         return {

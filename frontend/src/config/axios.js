@@ -1,7 +1,13 @@
 import axios from 'axios';
 
+const resolvedHost = typeof window !== 'undefined' && window.location?.hostname
+    ? window.location.hostname
+    : 'localhost';
+const allowDynamicHost = resolvedHost === 'localhost' || resolvedHost === '127.0.0.1';
+const fallbackBaseURL = allowDynamicHost ? `http://${resolvedHost}:5000/api` : '/api';
+
 const api = axios.create({
-    baseURL: 'http://localhost:5000/api',
+    baseURL: import.meta.env.VITE_API_BASE_URL || fallbackBaseURL,
     // Fix 1: send cookies (httpOnly JWT) with every request
     withCredentials: true,
 });

@@ -7,6 +7,12 @@ and converts to a temporary WAV before passing to SpeechRecognition.
 Requires:
     pip install pydub SpeechRecognition
     ffmpeg on PATH  (https://ffmpeg.org/download.html)
+
+FIX 3: `transcribe()` now ALWAYS returns a structured dict:
+    - Success: {"text": "the transcribed string"}
+    - Failure: {"error": "description"}
+This eliminates the inconsistency where success returned a plain str
+and failure returned a dict, which caused dead-code branches in tools.py.
 """
 
 import logging
@@ -21,14 +27,16 @@ _log = logging.getLogger(__name__)
 class STTService:
     """Transcribe audio files using Google Speech Recognition."""
 
-    def transcribe(self, audio_path: str) -> str:
+    def transcribe(self, audio_path: str) -> dict:
         """Transcribe an audio file to text.
 
         Args:
             audio_path: absolute path to the audio file (any ffmpeg format).
 
         Returns:
-            Transcribed text string, or a dict ``{"error": "..."}`` on failure.
+            Always a dict:
+            - {"text": "..."}  on success
+            - {"error": "..."} on failure
         """
         if not os.path.exists(audio_path):
             return {"error": "Audio file not found"}
@@ -79,8 +87,12 @@ class STTService:
             raise  # re-raise so the caller sees the error
 
     @staticmethod
-    def _recognise(wav_path: str) -> str:
+    def _recognise(wav_path: str) -> dict:
         """Transcribe a WAV file via Google Speech Recognition.
+
+        Returns:
+            {"text": "..."} on success
+            {"error": "..."} on failure
 
         Does NOT call ``adjust_for_ambient_noise`` — that method is designed
         for live microphone streams, not pre-recorded files.  On a file source
@@ -91,7 +103,8 @@ class STTService:
             audio_data = recognizer.record(source)
 
         try:
-            return recognizer.recognize_google(audio_data)
+            text = recognizer.recognize_google(audio_data)
+            return {"text": text}
         except sr.UnknownValueError:
             return {"error": "Could not understand audio — speech may be too quiet or unclear"}
         except sr.RequestError as exc:

@@ -32,7 +32,7 @@ export default function ExamMainContent({
     const mcq = isMcqUI(currentQuestion);
 
     return (
-        <div className="fixed top-[56px] bottom-[54px] left-[280px] right-[220px] overflow-y-auto">
+        <div className="fixed top-[56px] bottom-[54px] left-[280px] right-[220px] overflow-y-auto" role="main" aria-label={`Question ${currentIndex + 1} of ${total}`} aria-live="polite">
             <div className="max-w-4xl mx-auto px-6 py-5">
                 {/* Transition overlay */}
                 {transitionCard && (
@@ -232,8 +232,9 @@ export default function ExamMainContent({
                         type="button"
                         onClick={onGoPrev}
                         disabled={currentIndex <= 0}
+                        aria-disabled={currentIndex <= 0}
                         className="exam-focus"
-                        aria-label="Previous question"
+                        aria-label={`Go to previous question, question ${Math.max(1, currentIndex)}`}
                         style={{
                             minHeight: 48,
                             padding: '0 16px',
@@ -271,8 +272,10 @@ export default function ExamMainContent({
                         <button
                             type="button"
                             onClick={onGoNext}
+                            disabled={currentIndex >= total - 1}
+                            aria-disabled={currentIndex >= total - 1}
                             className="exam-focus"
-                            aria-label="Next question"
+                            aria-label={`Go to next question, question ${Math.min(total, currentIndex + 2)}`}
                             style={{
                                 minHeight: 48,
                                 padding: '0 18px',
@@ -290,8 +293,9 @@ export default function ExamMainContent({
                             type="button"
                             onClick={onOpenReview}
                             disabled={answered === 0}
+                            aria-disabled={answered === 0}
                             className="exam-focus"
-                            aria-label="Review and submit"
+                            aria-label={`Submit exam. ${total - answered} questions unanswered.`}
                             style={{
                                 minHeight: 48,
                                 padding: '0 18px',

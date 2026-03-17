@@ -14,14 +14,27 @@
 
 // ── STRUCTURAL (shortcut named formulas & grouping keywords) ─────────────────
 export const STRUCTURAL_RULES = [
+    {
+        pattern: /\bfraction with numerator (.+?) and denominator (.+)$/gi,
+        replace: (_, num, den) => `\\frac{${num.trim()}}{${den.trim()}}`
+    },
+    {
+        pattern: /\bfrac(?:tion)? (.+?) over (.+)$/gi,
+        replace: (_, num, den) => `\\frac{${num.trim()}}{${den.trim()}}`
+    },
+    {
+        pattern: /\bsquare root of quantity\s+(.+?)\s+end quantity\b/gi,
+        replace: (_, expr) => `\\sqrt{${expr.trim()}}`
+    },
     { pattern: /\bquadratic formula\b/gi, replace: 'x = \\frac{-b \\pm \\sqrt{b^{2}-4ac}}{2a}' },
     { pattern: /\beuler(?:'?s)? identity\b/gi, replace: 'e^{i\\pi} + 1 = 0' },
     { pattern: /\bpythagorean identity\b/gi, replace: '\\sin^{2}x + \\cos^{2}x = 1' },
     { pattern: /\bheat equation\b/gi, replace: '\\frac{\\partial u}{\\partial t} = k\\frac{\\partial^{2}u}{\\partial x^{2}}' },
     { pattern: /\blaplace transform of\b/gi, replace: '\\mathcal{L}\\{' },
     // Grouping trigger words
-    { pattern: /\bquantity\b/gi, replace: '(' },
+    // Keep 'end quantity' before 'quantity' so the latter doesn't corrupt the phrase.
     { pattern: /\bend quantity\b/gi, replace: ')' },
+    { pattern: /\bquantity\b/gi, replace: '(' },
     // Matrices
     {
         pattern: /\b2 by 2 matrix ([\w\s]+)\b/gi, replace: (_, els) => {
@@ -104,8 +117,8 @@ export const CALCULUS_RULES = [
         replace: (_, y, x) => `\\frac{d^{2}${y}}{d${x}^{2}}`
     },
     {
-        pattern: /\bderivative of (\w+) with respect to (\w+)\b/gi,
-        replace: (_, f, x) => `\\frac{d${f}}{d${x}}`
+        pattern: /\bderivative of (.+?) with respect to (\w+)\b/gi,
+        replace: (_, expr, x) => `\\frac{d}{d${x}}[${expr.trim()}]`
     },
     {
         pattern: /\bd (\w+) by d (\w+)\b/gi,
@@ -116,7 +129,10 @@ export const CALCULUS_RULES = [
         replace: (_, x) => `\\frac{d}{d${x}}`
     },
     { pattern: /\bsecond derivative of (\w+)\b/gi, replace: (_, f) => `${f}''` },
-    { pattern: /\bderivative of (\w+)\b/gi, replace: (_, f) => `\\frac{d}{dx}[${f}]` },
+    {
+        pattern: /\bderivative of (.+?)(?=\s*$)/gi,
+        replace: (_, expr) => `\\frac{d}{dx}[${expr.trim()}]`
+    },
     { pattern: /\b(\w+) double prime\b/gi, replace: (_, f) => `${f}''` },
     { pattern: /\b(\w+) prime\b/gi, replace: (_, f) => `${f}'` },
     { pattern: /\b(\w+) dot\b/gi, replace: (_, v) => `\\dot{${v}}` },
@@ -143,7 +159,25 @@ export const CALCULUS_RULES = [
     { pattern: /\bintegral of\b/gi, replace: '\\int' },
     { pattern: /\bintegral\b/gi, replace: '\\int' },
     // Differentials
-    { pattern: /\bd ([a-zA-Z])\b/g, replace: (_, v) => `\\,d${v}` },
+    { pattern: /(?:\s+d\s*|\s+d|^d\s*|^d)([a-zA-Z])\b/g, replace: (_, v) => `\\,d${v}` },
+    // Partial derivatives
+    {
+        pattern: /\bpartial\s+([a-zA-Z])\s+(?:partial|over\s+partial|with\s+respect\s+to)\s+([a-zA-Z])\b/gi,
+        replace: (_, f, x) => `\\frac{\\partial ${f}}{\\partial ${x}}`
+    },
+    {
+        pattern: /\bpartial\s+(?:derivative\s+of\s+)?([a-zA-Z])\s+with\s+respect\s+to\s+([a-zA-Z])\b/gi,
+        replace: (_, f, x) => `\\frac{\\partial ${f}}{\\partial ${x}}`
+    },
+    {
+        pattern: /\bsecond\s+partial\s+(?:of\s+)?([a-zA-Z])\s+with\s+respect\s+to\s+([a-zA-Z])\b/gi,
+        replace: (_, f, x) => `\\frac{\\partial^{2} ${f}}{\\partial ${x}^{2}}`
+    },
+    // Vector calculus
+    { pattern: /\bgradient\s+(?:of\s+)?([a-zA-Z])\b/gi, replace: (_, f) => `\\nabla ${f}` },
+    { pattern: /\bdivergence\s+(?:of\s+)?([a-zA-Z])\b/gi, replace: (_, f) => `\\nabla \\cdot ${f}` },
+    { pattern: /\bcurl\s+(?:of\s+)?([a-zA-Z])\b/gi, replace: (_, f) => `\\nabla \\times ${f}` },
+    { pattern: /\blaplacian\s+(?:of\s+)?([a-zA-Z])\b/gi, replace: (_, f) => `\\nabla^{2} ${f}` },
 ];
 
 // ── LIMITS ────────────────────────────────────────────────────────────────────
@@ -195,29 +229,30 @@ export const POWER_ROOT_RULES = [
     { pattern: /\bunder root\b/gi, replace: '\\sqrt{' },
     { pattern: /\broot (\w+)\b/gi, replace: (_, x) => `\\sqrt{${x}}` },
     // Powers
+    { pattern: /\be\s+to\s+the\s+(\w+)\b/gi, replace: (_, exp) => `e^{${exp}}` },
     { pattern: /\be to the power of\b/gi, replace: 'e^{' },
     { pattern: /\be to the i (\S+)\b/gi, replace: (_, x) => `e^{i${x}}` },
     { pattern: /\be to the\b/gi, replace: 'e^{' },
+    { pattern: /\b(\w+) to the power of (?:minus|negative)\s*([\w-]+)\b/gi, replace: (_, b, e) => `${b}^{-${String(e).replace(/^-/, '')}}` },
+    { pattern: /\b(\w+) to the power (?:minus|negative)\s*([\w-]+)\b/gi, replace: (_, b, e) => `${b}^{-${String(e).replace(/^-/, '')}}` },
     { pattern: /\b(\w+) to the power of ([\w]+)\b/gi, replace: (_, b, e) => `${b}^{${e}}` },
     { pattern: /\b(\w+) to the power ([\w]+)\b/gi, replace: (_, b, e) => `${b}^{${e}}` },
     { pattern: /\b(\w+) raised to (?:the )?power (?:of )?([\w]+)\b/gi, replace: (_, b, e) => `${b}^{${e}}` },
     { pattern: /\b(\w+) raised to ([\w]+)\b/gi, replace: (_, b, e) => `${b}^{${e}}` },
     { pattern: /\b(\w+) power ([\w]+)\b/gi, replace: (_, b, e) => `${b}^{${e}}` },
     { pattern: /\b10 to the ([\w]+)\b/gi, replace: (_, n) => `10^{${n}}` },
-    { pattern: /\be squared\b/gi, replace: 'e^{2}' },
-    { pattern: /\b(\w+) plus (\w+) whole squared\b/gi, replace: (_, a, b) => `(${a}+${b})^{2}` },
-    { pattern: /\b(\w+) minus (\w+) whole squared\b/gi, replace: (_, a, b) => `(${a}-${b})^{2}` },
-    { pattern: /\b(\w+) squared\b/gi, replace: (_, v) => `${v}^{2}` },
-    { pattern: /\b(\w+) cubed\b/gi, replace: (_, v) => `${v}^{3}` },
-    { pattern: /\bsquared\b/gi, replace: '^{2}' },
-    { pattern: /\bcubed\b/gi, replace: '^{3}' },
+    { pattern: /\b(\d+)\s+to\s+the\s+(\w+)\b/gi, replace: (_, base, exp) => `${base}^{${exp}}` },
+    { pattern: /\be square(?:d)?\b/gi, replace: 'e^{2}' },
+    { pattern: /\b(\w+) plus (\w+) whole square(?:d)?\b/gi, replace: (_, a, b) => `(${a}+${b})^{2}` },
+    { pattern: /\b(\w+) minus (\w+) whole square(?:d)?\b/gi, replace: (_, a, b) => `(${a}-${b})^{2}` },
+    { pattern: /\b(\w+) square(?:d)?\b/gi, replace: (_, v) => `${v}^{2}` },
+    { pattern: /\b(\w+) cube(?:d)?\b/gi, replace: (_, v) => `${v}^{3}` },
+    { pattern: /\bsquare(?:d)?\b/gi, replace: '^{2}' },
+    { pattern: /\bcube(?:d)?\b/gi, replace: '^{3}' },
     // Subscripts
     { pattern: /\b([a-zA-Z]) subscript (\w+)\b/gi, replace: (_, v, n) => `${v}_{${n}}` },
     { pattern: /\b([a-zA-Z]) sub (\w+)\b/gi, replace: (_, v, n) => `${v}_{${n}}` },
-    // Absolute value / modulus / factorial
-    { pattern: /\babsolute value of ([\w]+)\b/gi, replace: (_, x) => `|${x}|` },
-    { pattern: /\bmodulus of ([\w]+)\b/gi, replace: (_, x) => `|${x}|` },
-    { pattern: /\bmod ([\w]+)\b/gi, replace: (_, x) => `|${x}|` },
+    // Factorial
     { pattern: /\bmagnitude of ([\w]+)\b/gi, replace: (_, x) => `|\\vec{${x}}|` },
     { pattern: /\b(\w+) factorial\b/gi, replace: (_, n) => `${n}!` },
     { pattern: /\bfactorial of (\w+)\b/gi, replace: (_, n) => `${n}!` },
@@ -226,17 +261,27 @@ export const POWER_ROOT_RULES = [
 // ── TRIG, LOG, EXPONENTIAL ────────────────────────────────────────────────────
 export const FUNCTION_RULES = [
     // Log — specific before generic
-    { pattern: /\bcommon log(?:arithm)? of\b/gi, replace: '\\log_{10}' },
-    { pattern: /\bbinary log(?:arithm)? of\b/gi, replace: '\\log_{2}' },
+    { pattern: /\bcommon log(?:arithm)?\s+(?:of\s+)?/gi, replace: '\\log_{10} ' },
+    { pattern: /\bbinary log(?:arithm)?\s+(?:of\s+)?/gi, replace: '\\log_{2} ' },
+    { pattern: /\bnatural log(?:arithm)?\s+(?:of\s+)?/gi, replace: '\\ln ' },
+    { pattern: /\blog\s+base\s+2\s+(?:of\s+)?/gi, replace: '\\log_{2} ' },
+    { pattern: /\blog\s+base\s+10\s+(?:of\s+)?/gi, replace: '\\log_{10} ' },
     { pattern: /\bnatural log(?:arithm)? of (\w+)\b/gi, replace: (_, x) => `\\ln(${x})` },
     { pattern: /\bnatural log(?:arithm)?\b/gi, replace: '\\ln' },
     { pattern: /\bln of\b/gi, replace: '\\ln(' },
     { pattern: /\bln\b/gi, replace: '\\ln' },
     { pattern: /\blog base (\w+) of\b/gi, replace: (_, b) => `\\log_{${b}}` },
-    { pattern: /\blogarithm base (\w+) of\b/gi, replace: (_, b) => `\\log_{${b}}` },
+    { pattern: /\blogarithmic base (\w+) of\b/gi, replace: (_, b) => `\\log_{${b}}` },
     { pattern: /\blog(?:arithm)? of\b/gi, replace: '\\log' },
     { pattern: /\blog\b/gi, replace: '\\log' },
+    // Absolute value / modulus (moved from OPERATOR_RULES to prevent corruption)
+    { pattern: /\babs(?:olute)?\s+(?:value\s+of\s+)?(.+)/gi, replace: (_, v) => `\\left| ${v} \\right|` },
+    { pattern: /\bmodulus\s+of\s+(\w+)\b/gi, replace: (_, v) => `\\left|${v}\\right|` },
+    { pattern: /\bvertical\s+bar\s+(.+?)\s+vertical\s+bar\b/gi, replace: (_, v) => `\\left|${v}\\right|` },
     // Inverse trig — specific before generic
+    { pattern: /\b(?:arc\s*|inverse\s+)sine?\s+(?:of\s+)?/gi, replace: '\\arcsin ' },
+    { pattern: /\b(?:arc\s*|inverse\s+)cos(?:ine)?\s+(?:of\s+)?/gi, replace: '\\arccos ' },
+    { pattern: /\b(?:arc\s*|inverse\s+)tan(?:gent)?\s+(?:of\s+)?/gi, replace: '\\arctan ' },
     { pattern: /\barc sine\b/gi, replace: '\\arcsin' },
     { pattern: /\barc cosine\b/gi, replace: '\\arccos' },
     { pattern: /\barc tangent\b/gi, replace: '\\arctan' },
@@ -246,6 +291,10 @@ export const FUNCTION_RULES = [
     { pattern: /\binverse sine(?: of)?\b/gi, replace: '\\sin^{-1}(' },
     { pattern: /\binverse cosine(?: of)?\b/gi, replace: '\\cos^{-1}(' },
     { pattern: /\binverse tangent(?: of)?\b/gi, replace: '\\tan^{-1}(' },
+    // Hyperbolic trig
+    { pattern: /\bsinh\s+(?:of\s+)?/gi, replace: '\\sinh ' },
+    { pattern: /\bcosh\s+(?:of\s+)?/gi, replace: '\\cosh ' },
+    { pattern: /\btanh\s+(?:of\s+)?/gi, replace: '\\tanh ' },
     // Standard trig
     { pattern: /\bsine squared\b/gi, replace: '\\sin^{2}' },
     { pattern: /\bcosine squared\b/gi, replace: '\\cos^{2}' },
@@ -255,9 +304,9 @@ export const FUNCTION_RULES = [
     { pattern: /\bcosecant(?: of)?\b/gi, replace: '\\csc' },
     { pattern: /\bsecant(?: of)?\b/gi, replace: '\\sec' },
     { pattern: /\bcotangent(?: of)?\b/gi, replace: '\\cot' },
-    { pattern: /\bsin\b/gi, replace: '\\sin' },
-    { pattern: /\bcos\b/gi, replace: '\\cos' },
-    { pattern: /\btan\b/gi, replace: '\\tan' },
+    { pattern: /(?<!\\)\bsin\b/gi, replace: '\\sin' },
+    { pattern: /(?<!\\)\bcos\b/gi, replace: '\\cos' },
+    { pattern: /(?<!\\)\btan\b/gi, replace: '\\tan' },
     // Degrees
     { pattern: /\b(\d+) degrees?\b/gi, replace: (_, n) => `${n}°` },
 ];
@@ -342,6 +391,17 @@ export const STATS_RULES = [
         pattern: /\bproduct from (\w+) (?:equals?|=) (\w+) to (\w+) of\b/gi,
         replace: (_, v, lo, hi) => `\\prod_{${v}=${lo}}^{${hi}}`
     },
+    // Binomial coefficient
+    { pattern: /\b(\w+)\s+choose\s+(\w+)\b/gi, replace: (_, n, k) => `\\binom{${n}}{${k}}` },
+    {
+        pattern: /\bcombination\s+(\w+)\s+(?:taken\s+)?(\w+)\s+at\s+a\s+time\b/gi,
+        replace: (_, n, k) => `\\binom{${n}}{${k}}`
+    },
+    // Expected value / variance
+    { pattern: /\bE\s+of\s+([a-zA-Z])\b/gi, replace: (_, v) => `E(${v})` },
+    { pattern: /\bVar\s+of\s+([a-zA-Z])\b/gi, replace: (_, v) => `\\text{Var}(${v})` },
+    { pattern: /\bstandard\s+deviation\s+of\s+([a-zA-Z])\b/gi, replace: (_, v) => `\\sigma_{${v}}` },
+
     { pattern: /\b(\w+) choose (\w+)\b/gi, replace: (_, n, r) => `\\binom{${n}}{${r}}` },
     { pattern: /\bcombination (\w+) (\w+)\b/gi, replace: (_, n, r) => `\\binom{${n}}{${r}}` },
     { pattern: /\bn c r\b/gi, replace: '\\binom{n}{r}' },
@@ -428,7 +488,11 @@ export const OPERATOR_RULES = [
     // Generic fraction forms
     { pattern: /\b(\w+) upon (\w+)\b/gi, replace: (_, a, b) => `\\frac{${a}}{${b}}` },
     { pattern: /\b(\w+) over (\w+)\b/gi, replace: (_, a, b) => `\\frac{${a}}{${b}}` },
-    { pattern: /\b(\w+) by (\w+)\b/gi, replace: (_, a, b) => `\\frac{${a}}{${b}}` },
+    // Floor and ceiling
+    { pattern: /\bfloor\s+(?:of\s+)?(\w+)\b/gi, replace: (_, v) => `\\lfloor ${v} \\rfloor` },
+    { pattern: /\bceiling\s+(?:of\s+)?(\w+)\b/gi, replace: (_, v) => `\\lceil ${v} \\rceil` },
+    // Modulo
+    { pattern: /\b(\w+)\s+mod(?:ulo)?\s+(\w+)\b/gi, replace: (_, a, b) => `${a} \\bmod ${b}` },
     // Operators
     { pattern: /\bplus or minus\b/gi, replace: '\\pm' },
     { pattern: /\bminus or plus\b/gi, replace: '\\mp' },
@@ -482,10 +546,13 @@ export const BRACKET_RULES = [
 // ── POST-CLEANUP ───────────────────────────────────────────────────────────────
 export const POST_CLEANUP_RULES = [
     { pattern: /\s{2,}/g, replace: ' ' },
-    // Space BEFORE operators — only when preceded by alphanumeric or closing brace
-    { pattern: /([a-zA-Z0-9})])([+\-=<>])/g, replace: '$1 $2' },
-    // Space AFTER operators — only when followed by alphanumeric, backslash, or open grouping
-    { pattern: /([+\-=<>])([a-zA-Z0-9(\\])/g, replace: '$1 $2' },
+    // Space BEFORE operators — only when preceded by alphanumeric or closing brace,
+    // but NOT when preceded by { (would break x^{-2} → x^{ - 2}).
+    // Lookbehind: char before must be [a-zA-Z0-9}] but NOT {.
+    { pattern: /([a-zA-Z0-9}])(?<!\{.)([ ]*)([+\-=<>])/g, replace: '$1 $3' },
+    // Space AFTER operators — only when followed by alphanumeric, backslash, or open grouping,
+    // but NOT when the operator is directly followed by } (would break \frac{-1}{2}).
+    { pattern: /([+\-=<>])(?!\s*\})(?!\s*[_^]\{)([a-zA-Z0-9(\\])/g, replace: '$1 $2' },
     // Remove accidental space before sub/superscript braces
     { pattern: /\s+([_^])\{/g, replace: '$1{' },
     // Trim

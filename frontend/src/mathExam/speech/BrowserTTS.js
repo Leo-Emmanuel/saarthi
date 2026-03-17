@@ -13,9 +13,42 @@ export class BrowserTTS extends SpeechProvider {
         this._utteranceRef = null;
         this._queue = [];
         this._isSpeaking = false;
-        this._rate = options.rate ?? 0.95;
+        this._rate = options.rate ?? 0.88;
         this._pitch = options.pitch ?? 1.0;
         this._volume = options.volume ?? 1.0;
+
+        this._preferredVoiceNames = [
+            'Google US English',      // Chrome on desktop
+            'Microsoft Aria Online',  // Edge neural 
+            'Samantha',               // macOS
+            'Karen',                  // macOS Australian
+        ];
+        this._selectedVoice = null;
+        
+        if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+            window.speechSynthesis.addEventListener('voiceschanged', () => {
+                this._selectedVoice = null;
+                this._selectBestVoice();
+            });
+        }
+    }
+
+    _selectBestVoice() {
+        if (this._selectedVoice) return this._selectedVoice;
+        const voices = window.speechSynthesis.getVoices();
+        if (!voices.length) return null;
+        
+        for (const preferred of this._preferredVoiceNames) {
+            const found = voices.find(v => v.name.includes(preferred) && v.lang.startsWith('en'));
+            if (found) {
+                this._selectedVoice = found;
+                return found;
+            }
+        }
+        
+        const enUS = voices.find(v => v.lang === 'en-US');
+        this._selectedVoice = enUS || null;
+        return this._selectedVoice;
     }
 
     get isSupported() {
@@ -30,12 +63,15 @@ export class BrowserTTS extends SpeechProvider {
         if (!this.isSupported || !text) return Promise.resolve();
         const priority = options.priority ?? false;
 
-        return new Promise((resolve) => {
+        return new Promise((resolve, reject) => {
             const utterance = new SpeechSynthesisUtterance(text);
             utterance.lang = this.lang;
             utterance.rate = options.rate ?? this._rate;
             utterance.pitch = options.pitch ?? this._pitch;
             utterance.volume = options.volume ?? this._volume;
+
+            const voice = this._selectBestVoice();
+            if (voice) utterance.voice = voice;
 
             const finish = () => {
                 this._utteranceRef = null;
@@ -58,7 +94,7 @@ export class BrowserTTS extends SpeechProvider {
                 this._isSpeaking = true;
                 window.speechSynthesis.speak(utterance);
             } else if (this._isSpeaking) {
-                this._queue.push({ utterance, resolve });
+                this._queue.push({ utterance, resolve, reject });
             } else {
                 this._isSpeaking = true;
                 window.speechSynthesis.speak(utterance);
@@ -73,6 +109,8 @@ export class BrowserTTS extends SpeechProvider {
 
     cancel() {
         if (this.isSupported) {
+            this._queue.forEach(({ reject }) => reject?.(new Error('cancelled')));
+            this._queue = [];
             window.speechSynthesis.cancel();
             this._isSpeaking = false;
             this._utteranceRef = null;

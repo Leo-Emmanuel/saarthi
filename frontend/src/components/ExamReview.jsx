@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react';
 import { normalizeQuestionType, resolveMcqSelection, isQuestionAnswered, countAnsweredByType } from '../utils/mcqUtils';
+import useReviewVoiceCommands from '../hooks/useReviewVoiceCommands';
 
 const resolveMcq = (question, answer) => {
     const resolved = resolveMcqSelection(question, answer);
@@ -16,7 +18,41 @@ export default function ExamReview({
     unanswered = [],
     onWarningBack,
     onWarningSubmit,
+    speak,
 }) {
+    const [voiceIndex, setVoiceIndex] = useState(0);
+
+    useEffect(() => {
+        const total = Array.isArray(questions) ? questions.length : 0;
+        if (voiceIndex >= total && total > 0) {
+            setVoiceIndex(total - 1);
+        }
+    }, [questions, voiceIndex]);
+
+    useReviewVoiceCommands({
+        active: !showWarning,
+        questions,
+        answers,
+        speak,
+        onSubmit,
+        onClose,
+        onFocusNext: () => {
+            setVoiceIndex((prev) => {
+                const max = Math.max(0, questions.length - 1);
+                const next = Math.min(max, prev + 1);
+                speak?.(`Question ${next + 1}`);
+                return next;
+            });
+        },
+        onFocusPrevious: () => {
+            setVoiceIndex((prev) => {
+                const next = Math.max(0, prev - 1);
+                speak?.(`Question ${next + 1}`);
+                return next;
+            });
+        },
+    });
+
     if (showWarning) {
         return (
             <div
@@ -70,7 +106,7 @@ export default function ExamReview({
                         const hasText = isQuestionAnswered(q, answer);
 
                         return (
-                            <article key={q._id || index} style={{ border: '3px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--card)', padding: '18px 22px' }}>
+                            <article key={q._id || index} style={{ border: index === voiceIndex ? '3px solid var(--accent)' : '3px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--card)', padding: '18px 22px' }}>
                                 <div className="flex items-center justify-between gap-3 mb-2">
                                     <div className="flex items-center gap-2">
                                         <span style={{ border: '2px solid var(--border)', borderRadius: 999, padding: '2px 10px', fontWeight: 700, fontSize: 12, color: 'var(--text)' }}>Q{index + 1}</span>
@@ -120,7 +156,7 @@ export default function ExamReview({
                     <button type="button" onClick={onClose} aria-label="Back to exam" style={{ minWidth: 44, minHeight: 44, border: '3px solid var(--border)', color: 'var(--text)', background: 'var(--card)', borderRadius: 'var(--radius)', padding: '10px 18px', fontWeight: 700 }}>
                         ← Back to Exam
                     </button>
-                    <button type="button" onClick={() => onSubmit?.(true)} disabled={!canSubmit} aria-label="Confirm submit exam" style={{ minWidth: 44, minHeight: 44, background: canSubmit ? 'var(--success)' : 'var(--border)', color: 'var(--bg)', fontWeight: 800, border: 'none', borderRadius: 'var(--radius)', padding: '10px 18px', opacity: canSubmit ? 1 : 0.6, cursor: canSubmit ? 'pointer' : 'not-allowed' }}>
+                    <button type="button" onClick={() => onSubmit?.()} disabled={!canSubmit} aria-label="Confirm submit exam" style={{ minWidth: 44, minHeight: 44, background: canSubmit ? 'var(--success)' : 'var(--border)', color: 'var(--bg)', fontWeight: 800, border: 'none', borderRadius: 'var(--radius)', padding: '10px 18px', opacity: canSubmit ? 1 : 0.6, cursor: canSubmit ? 'pointer' : 'not-allowed' }}>
                         ✅ Confirm Submit
                     </button>
                 </div>

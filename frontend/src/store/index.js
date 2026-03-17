@@ -6,11 +6,13 @@
 import { configureStore } from '@reduxjs/toolkit';
 import mathExamReducer from './mathExamSlice.js';
 import examSessionReducer from './examSessionSlice.js';
+import ttsReducer from './ttsSlice.js';
 
 export const store = configureStore({
     reducer: {
         mathExam: mathExamReducer,
         examSession: examSessionReducer,
+        tts: ttsReducer,
     },
     middleware: (getDefaultMiddleware) =>
         getDefaultMiddleware({

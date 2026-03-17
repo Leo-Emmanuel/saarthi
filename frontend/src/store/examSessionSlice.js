@@ -8,6 +8,7 @@ import { createSlice } from '@reduxjs/toolkit';
 const initialState = {
     examId: null,
     questionText: '',
+    questions: [],
     questionIndex: 0,
     totalQuestions: 0,
     isExamMode: false,      // Locks non-essential navigation
@@ -30,6 +31,8 @@ export const examSessionSlice = createSlice({
                 title,
                 duration,
                 totalQuestions,
+                questions,
+                questionIndex,
                 // ✅ Caller supplies the timestamp so the reducer stays pure/deterministic.
                 // Dispatch as: dispatch(startSession({ …, startedAt: new Date().toISOString() }))
                 startedAt,
@@ -38,10 +41,11 @@ export const examSessionSlice = createSlice({
             state.title = title ?? '';
             state.duration = duration ?? 0;
             state.totalQuestions = totalQuestions ?? 0;
+            state.questions = questions || [];
+            state.questionIndex = questionIndex ?? 0;
             state.isExamMode = true;
             state.isSubmitted = false;
             state.sessionStartTime = startedAt ?? null;
-            state.questionIndex = 0;
         },
 
         setQuestion: (state, action) => {

@@ -6,6 +6,8 @@ import {
     persistAuth,
     clearAuth,
 } from './authStorage';
+import { useDispatch } from 'react-redux';
+import { setTTSSettings, resetTTSSettings } from '../store/ttsSlice';
 
 const AuthContext = createContext();
 
@@ -34,16 +36,22 @@ async function withBusy(busyRef, setBusy, action) {
  *
  * @returns {{ success: boolean, role?: string, error?: string }}
  */
-async function authenticateAndPersist(apiFn, extraFields, setUser) {
+async function authenticateAndPersist(apiFn, extraFields, setUser, dispatch) {
     const result = await apiFn();
     if (!result.success) return { success: false, error: result.error };
 
-    const { role, name } = result.data;
+    const { role, name, tts_settings } = result.data;
 
-    const userData = normaliseUser({ name, role, ...extraFields });
+    const userData = normaliseUser({ name, role, tts_settings, ...extraFields });
     // Fix 1: token param is ignored by persistAuth — cookie handles auth
     persistAuth(null, userData);
     setUser(userData);
+
+    dispatch(setTTSSettings({
+        rate: userData.tts_settings?.rate ?? 1.0,
+        pitch: userData.tts_settings?.pitch ?? 1.0,
+        voice: userData.tts_settings?.voice ?? null,
+    }));
 
     return { success: true, role };
 }
@@ -51,6 +59,7 @@ async function authenticateAndPersist(apiFn, extraFields, setUser) {
 // ── Provider (identity state only) ───────────────────────────────────────────
 
 export const AuthProvider = ({ children }) => {
+    const dispatch = useDispatch();
     const [user, setUser] = useState(null);
     /** True only during the one-time localStorage hydration on mount. */
     const [initializing, setInitializing] = useState(true);
@@ -63,9 +72,16 @@ export const AuthProvider = ({ children }) => {
         const stored = loadStoredUser();
         if (stored) {
             setUser(stored);
+            if (stored.tts_settings) {
+                dispatch(setTTSSettings({
+                    rate: stored.tts_settings.rate ?? 1.0,
+                    pitch: stored.tts_settings.pitch ?? 1.0,
+                    voice: stored.tts_settings.voice ?? null,
+                }));
+            }
         }
         setInitializing(false);
-    }, []);
+    }, [dispatch]);
 
     const login = useCallback(
         (email, password) =>
@@ -74,9 +90,10 @@ export const AuthProvider = ({ children }) => {
                     () => authApi.login(email, password),
                     { email },
                     setUser,
+                    dispatch
                 ),
             ),
-        [],
+        [dispatch],
     );
 
     const pinLogin = useCallback(
@@ -86,9 +103,10 @@ export const AuthProvider = ({ children }) => {
                     () => authApi.pinLogin(studentId, pin),
                     { studentId },
                     setUser,
+                    dispatch
                 ),
             ),
-        [],
+        [dispatch],
     );
 
     /** @returns {{ success: boolean, error?: string }} */
@@ -104,15 +122,15 @@ export const AuthProvider = ({ children }) => {
         [],
     );
 
-    /** @returns {{ success: boolean, error?: string }} */
+    /** @returns {{ success: boolean, error?: string, fields?: object, data?: object }} */
     const registerStudent = useCallback(
         async (name, studentId, department, pin) => {
             const result = await withBusy(busyCount, setBusy, () =>
                 authApi.registerStudent(name, studentId, department, pin),
             );
             return result.success
-                ? { success: true }
-                : { success: false, error: result.error };
+                ? { success: true, data: result.data }
+                : { success: false, error: result.error, fields: result.fields || null };
         },
         [],
     );
@@ -122,7 +140,8 @@ export const AuthProvider = ({ children }) => {
         await authApi.logout();
         clearAuth();
         setUser(null);
-    }, []);
+        dispatch(resetTTSSettings());
+    }, [dispatch]);
 
     return (
         <AuthContext.Provider

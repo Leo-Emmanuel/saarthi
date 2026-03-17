@@ -24,19 +24,28 @@ export async function fetchExams() {
 export async function uploadQuestionPaper(file) {
     const formData = new FormData();
     formData.append('file', file);
-    const res = await api.post('/exam/upload', formData);
-    return res.data.file_url;
+    try {
+        const res = await api.post('/exam/upload', formData);
+        return { success: true, file_url: res.data.file_url };
+    } catch (error) {
+        return {
+            success: false,
+            error: error.response?.data?.error || 'File upload failed',
+            fields: error.response?.data?.fields || null,
+        };
+    }
 }
 
 /** Create a new exam. */
-export async function createExam({ title, description, duration, file_path }) {
-    await api.post('/exam/create', {
+export async function createExam({ title, description, duration, file_path, questions }) {
+    const res = await api.post('/exam/create', {
         title,
         description,
         duration: parseInt(duration, 10),
         file_url: file_path, // backend expects snake_case 'file_url'
-        questions: [],
+        questions: Array.isArray(questions) ? questions : [],
     });
+    return res.data;
 }
 
 /** Delete an exam by ID. */

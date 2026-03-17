@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useMemo } from 'react';
+import { useRef, useEffect, useState, useMemo, useCallback } from 'react';
 import { resolveMcqSelection } from '../utils/mcqUtils';
 import MCQOptionCard from './MCQOptionCard';
 import MathRenderer from './MathRenderer';
@@ -37,7 +37,7 @@ function MCQRenderer({ question, answer, onAnswerChange, isVoiceActive, readOnly
                 SELECT ONE OPTION
             </h3>
 
-            <fieldset aria-label="Answer choices" disabled={readOnly} style={{ border: 'none', padding: 0, margin: 0 }}>
+            <fieldset role="radiogroup" aria-label="Answer options" disabled={readOnly} style={{ border: 'none', padding: 0, margin: 0 }}>
                 {options.length === 0 ? (
                     <div role="alert" style={{ color: 'var(--muted)', fontSize: 13 }}>
                         Options are not available for this question.
@@ -98,6 +98,91 @@ function MCQRenderer({ question, answer, onAnswerChange, isVoiceActive, readOnly
     );
 }
 
+// ── Custom Hooks ──────────────────────────────────────────────────────────────
+
+function useAnswerSync(initialText, questionId, onAnswerChange, isVoiceActive) {
+    const [localText, setLocalText] = useState(initialText);
+    const syncTimerRef = useRef(null);
+    const onAnswerChangeRef = useRef(onAnswerChange);
+    const localTextRef = useRef(localText);
+    const qIdRef = useRef(questionId);
+
+    // Update refs to latest values
+    onAnswerChangeRef.current = onAnswerChange;
+    localTextRef.current = localText;
+    qIdRef.current = questionId;
+
+    const isFocusedRef = useRef(false);
+
+    useEffect(() => {
+        if (initialText !== localText) {
+            if (!isFocusedRef.current || isVoiceActive) {
+                setLocalText(initialText);
+            }
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [initialText, isVoiceActive]);
+
+    useEffect(() => () => {
+        if (syncTimerRef.current) {
+            clearTimeout(syncTimerRef.current);
+            onAnswerChangeRef.current?.(qIdRef.current, localTextRef.current);
+        }
+    }, []);
+
+    const handleChange = useCallback((val, readOnly) => {
+        if (readOnly) return;
+        setLocalText(val);
+        if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+        syncTimerRef.current = setTimeout(() => onAnswerChangeRef.current?.(qIdRef.current, val), 600);
+    }, [qIdRef, onAnswerChangeRef]);
+
+    const clearCallback = useCallback((readOnly) => {
+        if (readOnly) return;
+        setLocalText('');
+        if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+        onAnswerChangeRef.current?.(qIdRef.current, '');
+    }, [qIdRef, onAnswerChangeRef]);
+
+    return {
+        localText,
+        setLocalText,
+        isFocusedRef,
+        handleChange,
+        clearCallback
+    };
+}
+
+// ── Components ────────────────────────────────────────────────────────────────
+
+function MathPreview({ text }) {
+    if (!text.includes('$')) return null;
+    return (
+        <div
+            aria-label="Math preview"
+            aria-live="polite"
+            style={{
+                borderTop: '1px solid var(--border)',
+                padding: '12px 22px 14px',
+                background: 'rgba(0,0,0,0.18)',
+            }}
+        >
+            <div style={{ fontSize: 10, fontWeight: 900, color: 'var(--muted)', letterSpacing: 1.5, marginBottom: 6 }}>
+                RENDERED MATH
+            </div>
+            <MathRenderer
+                text={text}
+                style={{
+                    fontSize: '1.1rem',
+                    color: 'var(--yellow)',
+                    display: 'block',
+                    lineHeight: 2,
+                }}
+            />
+        </div>
+    );
+}
+
 // ── Written / Voice renderer ───────────────────────────────────────────────────
 
 function WrittenRenderer({ question, answer, onAnswerChange, isVoiceActive, readOnly, stepNumber = 1, onRead }) {
@@ -106,23 +191,17 @@ function WrittenRenderer({ question, answer, onAnswerChange, isVoiceActive, read
     const minWords = Math.max(3, Number(question?.minWords || 0));
 
     const text = String(answer || '');
-    const [localText, setLocalText] = useState(text);
-    const syncTimerRef = useRef(null);
+    
+    const {
+        localText,
+        setLocalText,
+        isFocusedRef,
+        handleChange,
+        clearCallback
+    } = useAnswerSync(text, question?._id, onAnswerChange, isVoiceActive);
+
     const textareaRef = useRef(null);
     const [createdAt] = useState(() => new Date());
-
-    // ── Sync guard: only accept parent-driven updates when the textarea is NOT
-    // focused. This prevents the dictation-trigger race where onDictate calls
-    // onAnswerChange which re-renders with a new `answer` prop, causing this
-    // effect to wipe whatever the user just typed (auto-clear bug).
-    const isFocusedRef = useRef(false);
-    useEffect(() => {
-        if (!isFocusedRef.current && text !== localText) {
-            setLocalText(text);
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [text]);
-    useEffect(() => () => { if (syncTimerRef.current) clearTimeout(syncTimerRef.current); }, []);
 
     // Auto-focus when the question changes
     useEffect(() => {
@@ -137,13 +216,7 @@ function WrittenRenderer({ question, answer, onAnswerChange, isVoiceActive, read
     );
     const meetsMin = words >= minWords;
 
-    const handleChange = (e) => {
-        if (readOnly) return;
-        const val = e.target.value;
-        setLocalText(val);
-        if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
-        syncTimerRef.current = setTimeout(() => onAnswerChange?.(question._id, val), 600);
-    };
+    const onChangeOverride = (e) => handleChange(e.target.value, readOnly);
 
     return (
         <section
@@ -210,7 +283,7 @@ function WrittenRenderer({ question, answer, onAnswerChange, isVoiceActive, read
                     <textarea
                         ref={textareaRef}
                         value={localText}
-                        onChange={handleChange}
+                        onChange={onChangeOverride}
                         onFocus={() => { isFocusedRef.current = true; }}
                         onBlur={() => {
                             isFocusedRef.current = false;
@@ -261,31 +334,7 @@ function WrittenRenderer({ question, answer, onAnswerChange, isVoiceActive, read
                     </div>
                 </div>
 
-                {/* Live Math Preview — shown when answer contains LaTeX $...$ */}
-                {localText.includes('$') && (
-                    <div
-                        aria-label="Math preview"
-                        aria-live="polite"
-                        style={{
-                            borderTop: '1px solid var(--border)',
-                            padding: '12px 22px 14px',
-                            background: 'rgba(0,0,0,0.18)',
-                        }}
-                    >
-                        <div style={{ fontSize: 10, fontWeight: 900, color: 'var(--muted)', letterSpacing: 1.5, marginBottom: 6 }}>
-                            RENDERED MATH
-                        </div>
-                        <MathRenderer
-                            text={localText}
-                            style={{
-                                fontSize: '1.1rem',
-                                color: 'var(--yellow)',
-                                display: 'block',
-                                lineHeight: 2,
-                            }}
-                        />
-                    </div>
-                )}
+                <MathPreview text={localText} />
             </div>
 
             {/* Word count + marks */}
@@ -328,10 +377,7 @@ function WrittenRenderer({ question, answer, onAnswerChange, isVoiceActive, read
                 <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                     <button
                         type="button"
-                        onClick={() => {
-                            setLocalText('');
-                            onAnswerChange?.(question._id, '');
-                        }}
+                        onClick={() => clearCallback(readOnly)}
                         aria-label="Clear your written answer"
                         style={{
                             minWidth: 44,

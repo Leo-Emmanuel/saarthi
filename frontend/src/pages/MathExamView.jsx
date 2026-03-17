@@ -489,12 +489,22 @@ const MathExamView = () => {
             // ✅ Only enable auto-restart after TTS has finished so the mic does
             //    not accidentally capture the welcome speech output.
             readyToAutoListenRef.current = true;
-            // Small extra pause so TTS audio fully decays before STT activates
-            setTimeout(() => {
-                if (startListeningRef.current) startListeningRef.current();
-            }, 500);
+            // Auto-read the current question to guide the student
+            if (readCurrentQuestion) {
+                readCurrentQuestion().then(() => {
+                    // Small extra pause so TTS audio fully decays before STT activates
+                    setTimeout(() => {
+                        if (startListeningRef.current) startListeningRef.current();
+                    }, 500);
+                });
+            } else {
+                // Small extra pause so TTS audio fully decays before STT activates
+                setTimeout(() => {
+                    if (startListeningRef.current) startListeningRef.current();
+                }, 500);
+            }
         });
-    }, [safeId]);
+    }, [safeId, readCurrentQuestion]);
 
     // ── Auto-save every 30 s ──────────────────────────────────────────────────
     // Use refs so the interval fires WITHOUT being torn down every time `steps`
@@ -523,8 +533,9 @@ const MathExamView = () => {
     }, [dispatch, navigate, safeId]);
 
     // ── Voice controller ───────────────────────────────────────────────────────
-    const { startListening: _startListening, stopListening: _stopListening, say, readStep, readAll, isSupported } = useVoiceController({
+    const { startListening: _startListening, stopListening: _stopListening, say, readStep, readAll, readCurrentQuestion, isSupported } = useVoiceController({
         onSubmit: handleSubmit,
+        exams_questions: exam.questions || [],
     });
 
     /**

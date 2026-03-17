@@ -29,6 +29,12 @@ from schemas.auth_schemas import (
     RegisterStudentSchema,
 )
 
+
+# Lazy import avoids circular dependency (limiter is created after blueprints are imported)
+def _get_limiter():
+    from app import limiter
+    return limiter
+
 auth_bp = Blueprint("auth", __name__)
 
 _users = db.users
@@ -120,7 +126,7 @@ def _login_user(email, password):
     }, None
 
 
-def _register_student(name, student_id, pin, department, email=""):
+def _register_student(name, student_id, pin, department, email="", tts_settings=None):
     """Admin creates a student account with ID and PIN."""
     student_id = student_id.strip()
     # Case-insensitive uniqueness check
@@ -128,7 +134,7 @@ def _register_student(name, student_id, pin, department, email=""):
         return None, "Student ID already exists"
 
     hashed_pin = generate_password_hash(pin)
-    _users.insert_one({
+    student_doc = {
         "name": name,
         "studentId": student_id,
         "pin": hashed_pin,
@@ -136,10 +142,19 @@ def _register_student(name, student_id, pin, department, email=""):
         "role": "student",
         "email": email,
         "password": "",  # No password for voice students
+        "tts_settings": tts_settings or {"rate": 1.0, "pitch": 1.0, "voice": None},
         "failed_attempts": 0,
         "locked_until": None,
-    })
-    return True, None
+    }
+    _users.insert_one(student_doc)
+
+    public_student = {
+        "name": student_doc["name"],
+        "studentId": student_doc["studentId"],
+        "department": student_doc["department"],
+        "role": student_doc["role"],
+    }
+    return public_student, None
 
 
 def _login_voice(student_id, pin):
@@ -149,16 +164,21 @@ def _login_voice(student_id, pin):
     """
     user = _find_by_student_id(student_id)
     if not user:
-        return None, "Invalid Student ID"
+        return None, "Student ID not found", "STUDENT_NOT_FOUND", 401, {}
+
+    if user.get("active") is False or user.get("status") == "inactive":
+        return None, "Account not active", "ACCOUNT_INACTIVE", 403, {}
 
     # Check lockout status
     if is_account_locked(user):
-        return None, "Account is temporarily locked due to too many failed attempts. Please try again later."
+        locked_until = user.get("locked_until")
+        locked_until_str = locked_until.isoformat() if locked_until else None
+        return None, "Account is locked", "ACCOUNT_LOCKED", 423, {"locked_until": locked_until_str}
 
     if not check_password_hash(user.get("pin", ""), pin):
         # Record the failed attempt
         record_failed_attempt(db, user["_id"])
-        return None, "Invalid PIN"
+        return None, "Incorrect PIN", "WRONG_PIN", 401, {}
 
     # Successful login — reset counter
     reset_failed_attempts(db, user["_id"])
@@ -170,7 +190,7 @@ def _login_voice(student_id, pin):
         "name": user["name"],
         "studentId": user["studentId"],
         "tts_settings": user.get("tts_settings", {"rate": 1.0, "pitch": 1.0, "voice": None}),
-    }, None
+    }, None, None, 200, {}
 
 
 # ── Route handlers (thin — validation + response only) ───────────────────────
@@ -203,6 +223,12 @@ def register():
 def login():
     """Email + password login. Fix 1: sets JWT as httpOnly cookie."""
     data = request.validated_data
+
+    # IP-level rate limit — 20 attempts per minute per IP
+    try:
+        _get_limiter().limit("20 per minute")(lambda: None)()
+    except Exception:
+        return jsonify({"error": "Too many login attempts. Please wait before trying again."}), 429
 
     try:
         result, error_msg = _login_user(
@@ -239,18 +265,61 @@ def register_student():
     data = request.validated_data
 
     try:
-        result, error_msg = _register_student(
+        existing = _users.find_one({"studentId": data["studentId"], "role": "student"})
+        if existing:
+            return jsonify({
+                "error": "Validation failed",
+                "fields": {
+                    "studentId": f"Student ID '{data['studentId']}' is already registered",
+                },
+            }), 400
+
+        # Get admin's default TTS settings
+        from config.db import db as _db
+        admin_user = _db.users.find_one({"role": "admin"})
+        default_tts = {"rate": 1.0, "pitch": 1.0, "voice": None}
+        if admin_user:
+            system_settings = admin_user.get("system_settings") or {}
+            saved_tts = system_settings.get("default_tts") or {}
+            try:
+                rate = max(0.5, min(2.0, float(saved_tts.get("rate", 1.0))))
+            except (TypeError, ValueError):
+                rate = 1.0
+            try:
+                pitch = max(0.5, min(2.0, float(saved_tts.get("pitch", 1.0))))
+            except (TypeError, ValueError):
+                pitch = 1.0
+            default_tts = {
+                "rate": rate,
+                "pitch": pitch,
+                "voice": saved_tts.get("voice", None),
+            }
+
+        print(f"[REGISTER DEBUG] admin_user found: {admin_user is not None}")
+        print(f"[REGISTER DEBUG] system_settings: {admin_user.get('system_settings') if admin_user else 'N/A'}")
+        print(f"[REGISTER DEBUG] default_tts being applied: {default_tts}")
+
+        student, error_msg = _register_student(
             name=data["name"],
             student_id=data["studentId"],
             pin=data["pin"],
             department=data["department"],
             email=data.get("email", ""),
+            tts_settings=default_tts,
         )
         if error_msg:
-            return jsonify({"error": error_msg}), 400
+            return jsonify({
+                "error": "Validation failed",
+                "fields": {
+                    "studentId": error_msg,
+                },
+            }), 400
 
         _log.info("Student registered: %s", data["studentId"])
-        return jsonify({"message": "Student registered successfully"})
+        return jsonify({
+            "message": "Student registered successfully",
+            "student": student,
+        })
     except Exception:
         _log.exception("Student registration failed")
         return jsonify({"error": "Student registration failed"}), 500
@@ -284,13 +353,22 @@ def login_voice():
     """
     data = request.validated_data
 
+    # IP-level rate limit — 20 attempts per minute per IP
     try:
-        result, error_msg = _login_voice(
+        _get_limiter().limit("20 per minute")(lambda: None)()
+    except Exception:
+        return jsonify({"error": "Too many login attempts. Please wait before trying again.", "code": "RATE_LIMITED"}), 429
+
+    try:
+        result, error_msg, error_code, status_code, extra = _login_voice(
             student_id=data["studentId"],
             pin=data["pin"],
         )
-        if error_msg:
-            return jsonify({"error": error_msg}), 401
+        if error_code:
+            payload = {"error": error_msg, "code": error_code}
+            if extra:
+                payload.update(extra)
+            return jsonify(payload), status_code
 
         _log.info("Voice login: %s", data["studentId"])
         return _make_cookie_response(

@@ -289,6 +289,11 @@ class _SimilarityScorer:
 class _IntentDetector:
     """Classify voice input as a command or an answer."""
 
+    # Max words a command can have. Longer transcripts are always answers.
+    _MAX_COMMAND_WORDS = 12
+    # Minimum confidence to classify as a command (raised from 0.5 to 0.65)
+    _COMMAND_THRESHOLD = 0.65
+
     def detect(self, text):
         """Returns intent, action, confidence, and original text."""
         if not text or not text.strip():
@@ -296,6 +301,13 @@ class _IntentDetector:
 
         cleaned = text.strip().lower()
         words = cleaned.split()
+
+        # FIX 10: Long transcripts (>12 words) are always answers — commands are short
+        if len(words) > self._MAX_COMMAND_WORDS:
+            return {
+                "intent": "answer", "action": None,
+                "confidence": 1.0, "text": text.strip(),
+            }
 
         best_action = None
         best_score = 0.0
@@ -310,17 +322,21 @@ class _IntentDetector:
                         "confidence": 1.0, "text": text.strip(),
                     }
 
-                if pattern in cleaned:
+                # FIX 10: Use word-boundary regex instead of substring 'in' check
+                # to prevent 'the next step in the reaction' matching 'next'
+                if re.search(r'\b' + re.escape(pattern) + r'\b', cleaned):
                     score = min(len(pattern_words) / max(len(words), 1) + 0.3, 1.0)
                     if score > best_score:
                         best_score = score
                         best_action = action
-                elif words and words[0] in pattern_words:
-                    if 0.5 > best_score:
-                        best_score = 0.5
+                elif words and re.search(r'\b' + re.escape(words[0]) + r'\b', pattern):
+                    candidate_score = 0.4  # lower than threshold — first-word match only
+                    if candidate_score > best_score:
+                        best_score = candidate_score
                         best_action = action
 
-        if best_score >= 0.5:
+        # FIX 10: Raised threshold from 0.5 → 0.65 to reduce false positives
+        if best_score >= self._COMMAND_THRESHOLD:
             return {
                 "intent": "command", "action": best_action,
                 "confidence": round(best_score, 2), "text": text.strip(),

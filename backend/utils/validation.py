@@ -34,8 +34,8 @@ def validate_request(schema_class):
             except ValidationError as err:
                 return jsonify({
                     "error": "Validation failed",
-                    "errors": err.messages,
-                }), 422
+                    "fields": err.messages,
+                }), 400
 
             return fn(*args, **kwargs)
 

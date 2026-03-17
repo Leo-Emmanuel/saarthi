@@ -19,12 +19,13 @@ export default function StudentDashboardHeader({ onStartVoiceGuidance, voiceActi
                 >
                     {voiceActive
                         ? '🎙️ Listening… Say "Start Exam" followed by the number.'
-                        : 'Choose an exam card or use voice guidance to start.'}
+                        : 'Tap the mic button to hear your exams read aloud and select by voice.'}
                 </p>
             </div>
 
             <button
                 type="button"
+                autoFocus
                 onClick={onStartVoiceGuidance}
                 aria-label="Start voice guidance to choose exams"
                 className={voiceActive ? 'animate-pulse' : ''}
