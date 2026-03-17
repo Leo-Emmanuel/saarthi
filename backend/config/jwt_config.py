@@ -24,10 +24,10 @@ def configure_jwt(app):
     app.config["JWT_COOKIE_SAMESITE"] = "None"
 
     # ── CSRF double-submit cookie ─────────────────────────────────────────
-    # Flask-JWT-Extended sets a non-httpOnly CSRF cookie; the frontend must
-    # read it and send its value in the X-CSRF-TOKEN header on every request.
-    app.config["JWT_COOKIE_CSRF_PROTECT"] = True
-    app.config["JWT_CSRF_IN_COOKIES"] = True  # auto-set the CSRF cookie
+    # TEMPORARILY DISABLED for cross-origin deployment
+    # Will re-enable after fixing axios interceptor
+    app.config["JWT_COOKIE_CSRF_PROTECT"] = False
+    app.config["JWT_CSRF_IN_COOKIES"] = False
 
     # ── Token expiry ──────────────────────────────────────────────────────
     # Set token to expire after 4 hours (240 minutes) to allow long exams
