@@ -13,18 +13,13 @@ const api = axios.create({
 });
 
 // Fix 1: CSRF token handling for cookie-based JWT.
-// Flask-JWT-ExtendedSets a CSRF cookie; we read it and send it
+// Flask-JWT-Extended sets a CSRF cookie; we read it and send it
 // as a header on every mutating request.
 api.interceptors.request.use((config) => {
     // Read the CSRF token from the cookie set by Flask-JWT-Extended
     const csrfToken = getCookie('csrf_access_token');
-    console.log('[axios] CSRF token from cookie:', csrfToken); // DEBUG
-    console.log('[axios] Current cookies:', document.cookie); // DEBUG
     if (csrfToken) {
         config.headers['X-CSRF-TOKEN'] = csrfToken;
-        console.log('[axios] Set X-CSRF-TOKEN header:', csrfToken); // DEBUG
-    } else {
-        console.warn('[axios] WARNING: No CSRF token found!'); // DEBUG
     }
     return config;
 }, (error) => {
