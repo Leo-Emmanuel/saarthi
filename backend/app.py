@@ -62,7 +62,7 @@ limiter = Limiter(
 _debug_mode = os.getenv("FLASK_DEBUG", "false").lower() == "true"
 socketio = SocketIO(
     app,
-    cors_allowed_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    cors_allowed_origins=_allowed_origins,
     async_mode="threading",
     allowEIO3=True,
     logger=_debug_mode,
