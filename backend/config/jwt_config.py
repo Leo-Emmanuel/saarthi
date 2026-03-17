@@ -19,7 +19,8 @@ def configure_jwt(app):
     # ── Cookie flags ──────────────────────────────────────────────────────
     # Secure=False for local dev (no HTTPS). Set True in production.
     app.config["JWT_COOKIE_SECURE"] = os.getenv("JWT_COOKIE_SECURE", "false").lower() == "true"
-    app.config["JWT_COOKIE_SAMESITE"] = "Lax"
+    # SameSite=None required for cross-origin requests (frontend ≠ backend domain)
+    app.config["JWT_COOKIE_SAMESITE"] = "None"
 
     # ── CSRF double-submit cookie ─────────────────────────────────────────
     # Flask-JWT-Extended sets a non-httpOnly CSRF cookie; the frontend must
