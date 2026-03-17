@@ -6,6 +6,7 @@ CSRF double-submit protection is enabled to prevent cross-site attacks.
 """
 
 import os
+from datetime import timedelta
 
 
 def configure_jwt(app):
@@ -29,4 +30,5 @@ def configure_jwt(app):
     app.config["JWT_CSRF_IN_COOKIES"] = True  # auto-set the CSRF cookie
 
     # ── Token expiry ──────────────────────────────────────────────────────
-    # Keep the existing SECRET_KEY — already loaded from env.
+    # Set token to expire after 4 hours (240 minutes) to allow long exams
+    app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=4)
