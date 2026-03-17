@@ -696,9 +696,19 @@ def submit_exam(exam_id):
 
         try:
             from app import socketio
+            from services.email_service import send_exam_submission_confirmation
+            
             student_doc = _users.find_one({"_id": user_oid}, {"name": 1, "email": 1, "studentId": 1})
             exam_doc = _exams.find_one({"_id": exam_oid}, {"title": 1})
             submitted_at = datetime.now(timezone.utc).isoformat()
+            
+            # Send email confirmation to student
+            if student_doc:
+                student_email = student_doc.get("email") or student_doc.get("studentId")
+                student_name = student_doc.get("name", "Student")
+                exam_title = exam_doc.get("title", "Exam") if exam_doc else "Exam"
+                send_exam_submission_confirmation(student_email, student_name, exam_title)
+            
             print("[SOCKET] emitting new_submission")
             socketio.emit('new_submission', {
                 "_id": str(submission_id),
