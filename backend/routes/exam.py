@@ -35,8 +35,8 @@ _users = db.users
 _log = logging.getLogger(__name__)
 
 # ── Memory monitoring & grading queue ────────────────────────────────────────
-_active_grading_tasks = 0  # Limit concurrent grading to 3 per worker
-_max_concurrent_grading = 3
+_active_grading_tasks = 0  # Track concurrent grading tasks
+_max_concurrent_grading = 10  # Allow up to 10 concurrent MCQ gradings (fast: ~0.3s each)
 _grading_lock = threading.Lock()
 _grading_timeout_seconds = 30  # Max time for grading to complete (Render timeout is 60s)
 
@@ -73,10 +73,10 @@ def _can_start_grading() -> bool:
     
     with _grading_lock:
         if _active_grading_tasks >= _max_concurrent_grading:
-            _log.warning(f"[GRADE] Grading queue full: {_active_grading_tasks}/{_max_concurrent_grading}")
+            _log.error(f"[GRADE] ❌ QUEUE FULL: {_active_grading_tasks}/{_max_concurrent_grading} - Cannot start new grading task!")
             return False
         _active_grading_tasks += 1
-        _log.info(f"[GRADE] Starting grading task: {_active_grading_tasks}/{_max_concurrent_grading}")
+        _log.info(f"[GRADE] ✓ Can start grading: {_active_grading_tasks}/{_max_concurrent_grading} slots used")
         return True
 
 
@@ -960,6 +960,8 @@ def submit_exam(exam_id):
             {"exam_id": exam_oid, "user_id": user_oid},
             {"$set": {"grading_started_at": datetime.now(timezone.utc)}},
         )
+        
+        _log.info(f"[SUBMIT] Starting grading thread for exam {exam_oid}, user {user_oid}...")
         thread = threading.Thread(
             target=_grade_in_background,
             args=(app, exam_oid, user_oid, answers_raw),
@@ -967,7 +969,7 @@ def submit_exam(exam_id):
             name=f"grade-{exam_oid}-{user_oid}",
         )
         thread.start()
-        _log.info(f"[SUBMIT] Started grading thread for exam {exam_oid}, user {user_oid}")
+        _log.info(f"[SUBMIT] ✓ Grading thread launched for exam {exam_oid}, user {user_oid} (thread name: {thread.name})")
 
         try:
             from app import socketio
