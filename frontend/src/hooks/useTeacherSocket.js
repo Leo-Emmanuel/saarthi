@@ -16,8 +16,12 @@ export function useTeacherSocket(onNewSubmission, onSubmissionGraded) {
 
     useEffect(() => {
         socketRef.current = io(socketUrl, {
-            transports: ['polling', 'websocket'],
+            transports: ['polling'],  // Use polling only (WebSocket has issues on Render free tier)
             withCredentials: true,
+            reconnection: true,
+            reconnectionDelay: 1000,
+            reconnectionDelayMax: 5000,
+            reconnectionAttempts: 5,
         });
         socketRef.current.emit('join_teacher');
         socketRef.current.on('connect', () => setConnected(true));

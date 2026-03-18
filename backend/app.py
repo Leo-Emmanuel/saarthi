@@ -60,13 +60,19 @@ limiter = Limiter(
 )
 
 _debug_mode = os.getenv("FLASK_DEBUG", "false").lower() == "true"
+# Use polling only on free tier (WebSocket has issues on Render free tier with HTTPS)
+_is_production = os.getenv("RENDER", "false").lower() == "true"
 socketio = SocketIO(
     app,
     cors_allowed_origins=_allowed_origins,
     async_mode="threading",
     allowEIO3=True,
+    # On free tier production, use polling only (WebSocket upgrade fails)
+    transports=['polling'] if _is_production else ['websocket', 'polling'],
     logger=_debug_mode,
     engineio_logger=_debug_mode,
+    ping_timeout=60,
+    ping_interval=25,
 )
 from routes import socket_events  # noqa: F401
 
