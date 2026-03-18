@@ -319,6 +319,7 @@ def _grade_answers(questions, answers_raw):
     score = 0
     total_marks = 0
     nlp = _get_nlp()
+    _log.info(f"[GRADE] Grading {len(questions)} questions with answers type: {type(answers_raw).__name__}")
 
     for q in questions:
         q_id = str(q.get("_id", ""))
@@ -328,7 +329,7 @@ def _grade_answers(questions, answers_raw):
 
         correct = str(q.get("correct_answer", "")).strip()
         student = str(answers.get(q_id, "")).strip()
-        print(f"[GRADE DEBUG] q_id={q_id} student='{student}' correct='{correct}' type={q_type}")
+        _log.debug(f"[GRADE] Q{q_id} type={q_type} score={marks} student='{student[:50]}' correct='{correct[:50]}'")
 
         if not correct or not student:
             continue
@@ -345,14 +346,21 @@ def _grade_answers(questions, answers_raw):
         if q_type == "mcq":
             extracted = _extract_mcq_letter(student)
             norm_correct = _normalize_mcq(correct)
+            _log.debug(f"[GRADE] MCQ: extracted='{extracted}' vs correct='{norm_correct}'")
             if extracted == norm_correct:
+                _log.info(f"[GRADE] MCQ Q{q_id}: ✓ correct ({marks} pts)")
                 score += marks
+            else:
+                _log.info(f"[GRADE] MCQ Q{q_id}: ✗ wrong - got '{extracted}' expected '{norm_correct}'")
             continue
 
         # ── Exact match method ────────────────────────────────────────────
         if method == "exact":
             if student.lower() == correct.lower():
+                _log.info(f"[GRADE] Exact Q{q_id}: ✓ match ({marks} pts)")
                 score += marks
+            else:
+                _log.info(f"[GRADE] Exact Q{q_id}: ✗ no match")
             continue
 
         # ── NLP: similarity scoring with configurable thresholds ──────────
@@ -361,11 +369,15 @@ def _grade_answers(questions, answers_raw):
 
         result = nlp.score_similarity(student, correct)
         sim = result.get("score", 0)
+        _log.info(f"[GRADE] NLP Q{q_id}: similarity={sim:.2f} (full_thresh={threshold_full}, partial_thresh={threshold_partial})")
 
         if sim >= threshold_full:
+            _log.info(f"[GRADE] NLP Q{q_id}: ✓ full score ({marks} pts)")
             score += marks
         elif sim >= threshold_partial:
-            score += marks * 0.5  # partial credit
+            partial_score = marks * 0.5
+            _log.info(f"[GRADE] NLP Q{q_id}: ~ partial score ({partial_score:.1f} pts)")
+            score += partial_score
 
     return score, total_marks
 
@@ -408,6 +420,8 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
     Includes memory monitoring and grading queue management.
     Includes timeout to prevent worker hangs.
     """
+    _log.info(f"[GRADE] ▶ THREAD STARTED for exam {exam_oid}, user {user_oid}")
+    
     # Check if we can start grading
     if not _can_start_grading():
         _log.warning(f"[GRADE] Could not start grading for exam {exam_oid}, user {user_oid} - queue full")
@@ -419,11 +433,11 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
             # Notify teachers of queue-full scenario
             try:
                 from app import socketio
-                submission_doc = _submissions.find_one({"_id": ObjectId(exam_oid) if isinstance(exam_oid, (str, ObjectId)) else exam_oid, "user_id": user_oid})
+                submission_doc = _submissions.find_one({"exam_id": exam_oid, "user_id": user_oid})
                 user_doc = _users.find_one({"_id": user_oid})
                 exam_doc = _exams.find_one({"_id": exam_oid})
                 socketio.emit('submission_graded', {
-                    "_id": str(submission_doc.get("_id", "")),
+                    "_id": str(submission_doc.get("_id", "")) if submission_doc else "",
                     "examId": str(exam_oid),
                     "examTitle": exam_doc.get("title", "") if exam_doc else "",
                     "studentName": user_doc.get("name", "Unknown") if user_doc else "Unknown",
@@ -433,7 +447,7 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
                     "total_marks": 0,
                     "is_graded": True,
                     "status": "graded",
-                }, room='teachers')
+                }, to=None, room='teachers')  # type: ignore
             except Exception:
                 _log.exception("Failed to emit queue-full notification")
         return
@@ -505,7 +519,7 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
             else:
                 _log.info(f"[GRADE] Step 3 (generate PDF): SKIPPED (mem={mem['rss_mb']:.1f}MB)")
 
-            print(f"[GRADE DEBUG] FINAL score={score} total_marks={total_marks}")
+            _log.info(f"[GRADE] Step 2 complete: FINAL score={score} total_marks={total_marks}")
 
             # Step 4: Update database
             step4_start = time.time()
@@ -544,23 +558,56 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
                     "total_marks": total_marks,
                     "is_graded": True,
                     "status": "graded",
-                }, room='teachers')  # type: ignore
+                }, to=None, room='teachers')  # type: ignore
                 step5_time = time.time() - step5_start
                 _log.info(f"[GRADE] Step 5 (emit event): {step5_time:.2f}s")
-                print(f"[SOCKET] emitted submission_graded for user {user_oid}")
+                _log.info(f"[SOCKET] ✓ Emitted submission_graded for user {user_oid}")
             except Exception:
                 _log.exception("Failed to emit submission_graded event")
             
             total_time = time.time() - start_time
-            _log.info(f"[GRADE] COMPLETE for exam {exam_oid}, user {user_oid} in {total_time:.2f}s: {score}/{total_marks}")
-    except Exception:
-        _log.exception("Background grading failed for exam %s", exam_oid)
-        # Mark as graded with error so the frontend doesn't poll forever
-        with app.app_context():
             _submissions.update_one(
                 {"exam_id": exam_oid, "user_id": user_oid},
-                {"$set": {"status": "graded", "score": 0, "total_marks": 0}},
+                {"$set": {"grading_completed_at": datetime.now(timezone.utc)}},
             )
+            _log.info(f"[GRADE] ✓ COMPLETE for exam {exam_oid}, user {user_oid} in {total_time:.2f}s: {score}/{total_marks}")
+    except Exception as exc:
+        _log.exception(f"[GRADE] EXCEPTION: Background grading failed for exam {exam_oid}, user {user_oid}")
+        # Mark as graded with error so the frontend doesn't poll forever
+        with app.app_context():
+            try:
+                _submissions.update_one(
+                    {"exam_id": exam_oid, "user_id": user_oid},
+                    {"$set": {
+                        "status": "graded",
+                        "score": 0,
+                        "total_marks": 0,
+                        "grading_error": str(exc),
+                        "grading_completed_at": datetime.now(timezone.utc),
+                    }},
+                )
+                # Emit Socket.IO notification for error case
+                try:
+                    from app import socketio
+                    submission_doc = _submissions.find_one({"exam_id": exam_oid, "user_id": user_oid})
+                    user_doc = _users.find_one({"_id": user_oid})
+                    exam_doc = _exams.find_one({"_id": exam_oid})
+                    socketio.emit('submission_graded', {
+                        "_id": str(submission_doc.get("_id", "")) if submission_doc else "",
+                        "examId": str(exam_oid),
+                        "examTitle": exam_doc.get("title", "") if exam_doc else "",
+                        "studentName": user_doc.get("name", "Unknown") if user_doc else "Unknown",
+                        "studentEmail": (user_doc.get("email") or user_doc.get("studentId")) if user_doc else "Unknown",
+                        "studentId": user_doc.get("studentId", "") if user_doc else "",
+                        "score": 0,
+                        "total_marks": 0,
+                        "is_graded": True,
+                        "status": "graded_error",
+                    }, room='teachers')  # type: ignore
+                except Exception:
+                    _log.exception("[GRADE] Failed to emit error notification")
+            except Exception:
+                _log.exception("[GRADE] Failed to update submission with error status")
     finally:
         _finish_grading()
         _log_memory_status("GRADE_END")
@@ -868,14 +915,21 @@ def submit_exam(exam_id):
             {"$set": {"status": "grading"}},
         )
 
-        # Launch grading in background thread
+        # Launch grading in background thread (non-daemon to ensure completion)
         app = current_app._get_current_object()  # type: ignore
+        # Track grading start time for stuck job detection
+        _submissions.update_one(
+            {"exam_id": exam_oid, "user_id": user_oid},
+            {"$set": {"grading_started_at": datetime.now(timezone.utc)}},
+        )
         thread = threading.Thread(
             target=_grade_in_background,
             args=(app, exam_oid, user_oid, answers_raw),
-            daemon=True,
+            daemon=False,  # Non-daemon to ensure grading completes even if main thread exits
+            name=f"grade-{exam_oid}-{user_oid}",
         )
         thread.start()
+        _log.info(f"[SUBMIT] Started grading thread for exam {exam_oid}, user {user_oid}")
 
         try:
             from app import socketio
@@ -898,9 +952,9 @@ def submit_exam(exam_id):
                     exam_title = exam_doc.get("title", "Exam") if exam_doc else "Exam"
                     send_exam_submission_confirmation(student_email, student_name, exam_title)
                 else:
-                    print(f"⚠️  Skipping email: No valid email for user {user_oid}")
+                    _log.warning(f"⚠️  Skipping email: No valid email for user {user_oid}")
             
-            print("[SOCKET] emitting new_submission")
+            _log.info("[SUBMIT] Emitting new_submission Socket event to teachers")
             socketio.emit('new_submission', {
                 "_id": str(submission_id),
                 "examId": str(exam_oid),
