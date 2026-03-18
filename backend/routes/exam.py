@@ -9,12 +9,15 @@ grading logic, and PDF generation so they can be tested independently.
 
 import logging
 import os
+import re
 import threading
+from typing import Any
 from bson import ObjectId
 from datetime import datetime, timezone
-from flask import Blueprint, jsonify, request, current_app
+from flask import Blueprint, jsonify, request, current_app, Request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from werkzeug.utils import secure_filename
+from werkzeug.local import LocalProxy
 from config.db import db
 from models.exam import Exam, Question
 from services.upload import UploadService
@@ -396,7 +399,7 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
                     "score": score,
                     "total_marks": total_marks,
                     "status": "graded",
-                }, room='teachers')
+                }, room='teachers')  # type: ignore
                 print(f"[SOCKET] emitted submission_graded for user {user_oid}")
             except Exception:
                 _log.exception("Failed to emit submission_graded event")
@@ -454,7 +457,7 @@ def upload_file():
 @validate_request(ExamCreateSchema)
 def create_exam():
     """Create a new exam. Optionally auto-parse questions from uploaded file."""
-    data = request.validated_data
+    data: dict[str, Any] = request.validated_data  # type: ignore
 
     try:
         current_user_id = get_jwt_identity()
@@ -656,7 +659,7 @@ def submit_exam(exam_id):
     Fix 5: writes answers in structured array format.
     Fix 7: when final=true, returns 202 and grades asynchronously.
     """
-    data = request.validated_data
+    data: dict[str, Any] = request.validated_data  # type: ignore
 
     exam_oid = _safe_object_id(exam_id)
     user_oid = _safe_object_id(get_jwt_identity())
@@ -712,7 +715,7 @@ def submit_exam(exam_id):
         )
 
         # Launch grading in background thread
-        app = current_app._get_current_object()
+        app = current_app._get_current_object()  # type: ignore
         thread = threading.Thread(
             target=_grade_in_background,
             args=(app, exam_oid, user_oid, answers_raw),
@@ -754,7 +757,7 @@ def submit_exam(exam_id):
                 "submittedAt": submitted_at,
                 "score": 0,
                 "status": "grading",
-            }, room='teachers')
+            }, room='teachers')  # type: ignore
         except Exception:
             _log.exception("Failed to emit submission socket event")
 
