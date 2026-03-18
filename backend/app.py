@@ -21,6 +21,14 @@ from routes.admin import admin_bp
 from routes.evaluation import evaluation_bp
 from routes.tools import tools_bp
 
+# Configure logging to capture all logger output to stdout
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(message)s",  # Simple format - just the message
+    stream=sys.stdout,
+    force=True,  # Override any existing configuration
+)
+
 app = Flask(__name__)
 _secret_key = os.getenv("SECRET_KEY")
 if not _secret_key:
