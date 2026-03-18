@@ -104,13 +104,8 @@ socketio = SocketIO(
     ping_timeout=60,                          # Close idle connections after 60s
     ping_interval=25,                         # Send ping every 25s
     max_http_buffer_size=10000000,            # 10MB buffer for large messages
-    upgrade_timeout=10,                       # Allow 10s for transport upgrade
-    polling_interval=25,                      # Polling heartbeat every 25s
     http_compression=False,                   # Disable compression (can cause 400s)
     manage_ack=True,                          # Properly manage message acknowledgments
-    reconnection_attempts=None,               # Allow unlimited reconnections
-    reconnection_delay=100,                   # 100ms initial delay
-    reconnection_delay_max=5000,              # Max 5s delay
 )
 
 from routes import socket_events  # noqa: F401
