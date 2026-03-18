@@ -35,8 +35,8 @@ _users = db.users
 _log = logging.getLogger(__name__)
 
 # ── Memory monitoring & grading queue ────────────────────────────────────────
-_active_grading_tasks = 0  # Limit concurrent grading to 1 per worker
-_max_concurrent_grading = 1
+_active_grading_tasks = 0  # Limit concurrent grading to 3 per worker
+_max_concurrent_grading = 3
 _grading_lock = threading.Lock()
 _grading_timeout_seconds = 30  # Max time for grading to complete (Render timeout is 60s)
 
@@ -416,6 +416,26 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
                 {"exam_id": exam_oid, "user_id": user_oid},
                 {"$set": {"status": "graded", "score": 0, "total_marks": 0}},
             )
+            # Notify teachers of queue-full scenario
+            try:
+                from app import socketio
+                submission_doc = _submissions.find_one({"_id": ObjectId(exam_oid) if isinstance(exam_oid, (str, ObjectId)) else exam_oid, "user_id": user_oid})
+                user_doc = _users.find_one({"_id": user_oid})
+                exam_doc = _exams.find_one({"_id": exam_oid})
+                socketio.emit('submission_graded', {
+                    "_id": str(submission_doc.get("_id", "")),
+                    "examId": str(exam_oid),
+                    "examTitle": exam_doc.get("title", "") if exam_doc else "",
+                    "studentName": user_doc.get("name", "Unknown") if user_doc else "Unknown",
+                    "studentEmail": (user_doc.get("email") or user_doc.get("studentId")) if user_doc else "Unknown",
+                    "studentId": user_doc.get("studentId", "") if user_doc else "",
+                    "score": 0,
+                    "total_marks": 0,
+                    "is_graded": True,
+                    "status": "graded",
+                }, room='teachers')
+            except Exception:
+                _log.exception("Failed to emit queue-full notification")
         return
     
     start_time = time.time()
