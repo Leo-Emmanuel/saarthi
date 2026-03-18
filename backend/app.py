@@ -75,7 +75,8 @@ jwt = JWTManager(app)
 # ── CORS: allow credentials (cookies) from the Vite dev server ────────────────
 _raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
 _allowed_origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
-CORS(app, supports_credentials=True, origins=_allowed_origins)
+CORS(app, supports_credentials=True, origins=_allowed_origins, allow_headers=['Content-Type', 'Authorization'])
+
 
 # ── Fix 3: Rate limiter (shared instance, imported by route modules) ──────────
 limiter = Limiter(
@@ -99,11 +100,19 @@ socketio = SocketIO(
     logger=_debug_mode,
     engineio_logger=_debug_mode,
     transports=_allowed_transports,           # Force polling on Render
-    ping_timeout=60,                          # Close idle connections after 60s (increased for stability)
+    allow_upgrades=False,                     # Disable transport upgrades (use polling only)
+    ping_timeout=60,                          # Close idle connections after 60s
     ping_interval=25,                         # Send ping every 25s
     max_http_buffer_size=10000000,            # 10MB buffer for large messages
     upgrade_timeout=10,                       # Allow 10s for transport upgrade
+    polling_interval=25,                      # Polling heartbeat every 25s
+    http_compression=False,                   # Disable compression (can cause 400s)
+    manage_ack=True,                          # Properly manage message acknowledgments
+    reconnection_attempts=None,               # Allow unlimited reconnections
+    reconnection_delay=100,                   # 100ms initial delay
+    reconnection_delay_max=5000,              # Max 5s delay
 )
+
 from routes import socket_events  # noqa: F401
 
 # ── Graceful shutdown for Socket.IO ─────────────────────────────────────────────
@@ -147,6 +156,22 @@ app.register_blueprint(exam_bp, url_prefix="/api/exam")
 app.register_blueprint(admin_bp, url_prefix="/api/admin")
 app.register_blueprint(evaluation_bp, url_prefix="/api/evaluation")
 app.register_blueprint(tools_bp, url_prefix="/api/tools")
+
+# ── Error handlers for debugging ──────────────────────────────────────────────
+@app.errorhandler(400)
+def handle_bad_request(e):
+    """Log 400 errors (especially Socket.IO polling failures)."""
+    _startup_log.warning(f"[400] Bad Request: {request.method} {request.path} - {str(e)}")
+    if 'socket.io' in request.path:
+        _startup_log.warning(f"[SOCKET.IO] Polling error - Method: {request.method}, Path: {request.path}, Args: {request.args}")
+    return {"error": "Bad Request"}, 400
+
+
+@app.errorhandler(500)
+def handle_internal_error(e):
+    """Log 500 errors."""
+    _startup_log.error(f"[500] Internal Server Error: {request.method} {request.path} - {str(e)}")
+    return {"error": "Internal Server Error"}, 500
 
 with app.app_context():
     create_indexes()

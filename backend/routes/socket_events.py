@@ -1,4 +1,4 @@
-from flask_socketio import join_room, leave_room, emit
+from flask_socketio import join_room, leave_room, emit, disconnect
 from flask_jwt_extended import decode_token
 from flask import request as flask_request
 from app import socketio
@@ -11,12 +11,30 @@ _log = logging.getLogger(__name__)
 def on_connect(auth):
     """Handle Socket.IO connection."""
     try:
-        _log.info(f"[SOCKET] New connection attempt")
+        _log.info(f"[SOCKET] New connection attempt from {flask_request.remote_addr}")
         return True  # Accept connection, validate auth on join_teacher instead
         
     except Exception as e:
         _log.exception(f"[SOCKET] connect failed: {str(e)}")
         return False
+
+
+@socketio.on_error()
+def on_error(e):
+    """Global error handler for Socket.IO."""
+    _log.error(f"[SOCKET] Error: {str(e)}", exc_info=True)
+
+
+@socketio.on_error_default
+def default_error_handler(e):
+    """Default error handler for unhandled exceptions."""
+    _log.error(f"[SOCKET] Unhandled error: {str(e)}", exc_info=True)
+
+
+@socketio.on('disconnect')
+def on_disconnect():
+    """Handle client disconnect."""
+    _log.info(f"[SOCKET] Client disconnected from {flask_request.remote_addr}")
 
 
 @socketio.on('join_teacher')
