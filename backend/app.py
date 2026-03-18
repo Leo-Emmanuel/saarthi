@@ -2,6 +2,8 @@ import os
 import sys
 import logging
 import time
+import signal
+import atexit
 from datetime import datetime
 
 from dotenv import load_dotenv
@@ -92,8 +94,34 @@ socketio = SocketIO(
     async_mode="threading",
     logger=_debug_mode,
     engineio_logger=_debug_mode,
+    ping_timeout=30,           # Close idle connections after 30s
+    ping_interval=15,          # Send ping every 15s to detect dead connections
+    max_http_buffer_size=1000000,  # 1MB buffer for large messages
 )
 from routes import socket_events  # noqa: F401
+
+# ── Graceful shutdown for Socket.IO ─────────────────────────────────────────────
+def _close_socketio_connections():
+    """Close all active Socket.IO connections on shutdown."""
+    try:
+        _startup_log.info("[SHUTDOWN] Closing Socket.IO connections...")
+        # Emit disconnect event to all connected clients
+        socketio.emit('server_shutdown', {'message': 'Server is shutting down'}, namespace='/')
+        _startup_log.info("[SHUTDOWN] Socket.IO disconnect message sent")
+    except Exception as e:
+        _startup_log.warning(f"[SHUTDOWN] Error closing Socket.IO: {e}")
+
+# Register handler for both normal exit and signals
+atexit.register(_close_socketio_connections)
+
+def _shutdown_signal_handler(signum, frame):
+    """Handle SIGTERM/SIGINT for graceful shutdown."""
+    _startup_log.info(f"[SHUTDOWN] Received signal {signum}, closing connections...")
+    _close_socketio_connections()
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, _shutdown_signal_handler)
+signal.signal(signal.SIGINT, _shutdown_signal_handler)
 
 app.register_blueprint(auth_bp, url_prefix="/api/auth")
 app.register_blueprint(exam_bp, url_prefix="/api/exam")
