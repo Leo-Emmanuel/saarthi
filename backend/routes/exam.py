@@ -381,8 +381,13 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
                 from app import socketio
                 user_data = user_doc if user_doc else {}
                 exam_data = exam_doc if exam_doc else {}
+                
+                # Fetch the submission to get the correct _id
+                submission_doc = _submissions.find_one({"exam_id": exam_oid, "user_id": user_oid})
+                submission_id = str(submission_doc.get("_id", "")) if submission_doc else ""
+                
                 socketio.emit('submission_graded', {
-                    "_id": str(_submissions.find_one({"exam_id": exam_oid, "user_id": user_oid}).get("_id", "")),
+                    "_id": submission_id,
                     "examId": str(exam_oid),
                     "examTitle": exam_data.get("title", ""),
                     "studentName": user_data.get("name", "Unknown"),
