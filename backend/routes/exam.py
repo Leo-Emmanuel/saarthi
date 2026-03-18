@@ -12,6 +12,7 @@ import os
 import re
 import threading
 import psutil  # type: ignore
+import time
 from typing import Any
 from bson import ObjectId
 from datetime import datetime, timezone
@@ -37,6 +38,7 @@ _log = logging.getLogger(__name__)
 _active_grading_tasks = 0  # Limit concurrent grading to 1 per worker
 _max_concurrent_grading = 1
 _grading_lock = threading.Lock()
+_grading_timeout_seconds = 30  # Max time for grading to complete (Render timeout is 60s)
 
 
 def _get_memory_usage() -> dict:
@@ -404,6 +406,7 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
 
     Uses app.app_context() since Flask context is not available in threads.
     Includes memory monitoring and grading queue management.
+    Includes timeout to prevent worker hangs.
     """
     # Check if we can start grading
     if not _can_start_grading():
@@ -415,32 +418,77 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
             )
         return
     
+    start_time = time.time()
+    
     try:
         with app.app_context():
             _log_memory_status("GRADE_START")
             
+            # Step 1: Fetch documents
+            step1_start = time.time()
             exam_doc = _exams.find_one({"_id": exam_oid})
             user_doc = _users.find_one({"_id": user_oid})
+            step1_time = time.time() - step1_start
+            _log.info(f"[GRADE] Step 1 (fetch docs): {step1_time:.2f}s")
 
+            # Check timeout after first step
+            elapsed = time.time() - start_time
+            if elapsed > _grading_timeout_seconds:
+                _log.error(f"[GRADE] TIMEOUT: Already at {elapsed:.1f}s after fetch, aborting grading")
+                _finish_grading()
+                _submissions.update_one(
+                    {"exam_id": exam_oid, "user_id": user_oid},
+                    {"$set": {"status": "graded", "score": 0, "total_marks": 0}},
+                )
+                return
+
+            # Step 2: Grade answers
+            step2_start = time.time()
             score, total_marks = 0, 0
             if exam_doc and exam_doc.get("questions"):
                 score, total_marks = _grade_answers(exam_doc["questions"], answers_raw)
+            step2_time = time.time() - step2_start
+            _log.info(f"[GRADE] Step 2 (grade answers): {step2_time:.2f}s → score={score}/{total_marks}")
+
+            # Check timeout after grading
+            elapsed = time.time() - start_time
+            if elapsed > _grading_timeout_seconds:
+                _log.error(f"[GRADE] TIMEOUT: Already at {elapsed:.1f}s after grading, skipping PDF")
+                _finish_grading()
+                # Still save the score even on timeout
+                _submissions.update_one(
+                    {"exam_id": exam_oid, "user_id": user_oid},
+                    {"$set": {
+                        "status": "graded",
+                        "submitted_at": datetime.now(timezone.utc),
+                        "score": score,
+                        "total_marks": total_marks,
+                    }},
+                )
+                return
 
             _log_memory_status("GRADE_COMPLETE")
             
-            # Generate PDF (non-critical, skip on memory pressure)
+            # Step 3: Generate PDF (non-critical, skip on timeout or memory pressure)
             pdf_url = None
             mem = _get_memory_usage()
-            if exam_doc and user_doc and mem["rss_mb"] < 60:  # Only generate PDF if memory allows
+            if exam_doc and user_doc and mem["rss_mb"] < 60:
+                step3_start = time.time()
                 try:
                     pdf_url = _generate_submission_pdf(
                         user_doc, exam_doc, str(exam_oid), answers_raw, score, total_marks,
                     )
+                    step3_time = time.time() - step3_start
+                    _log.info(f"[GRADE] Step 3 (generate PDF): {step3_time:.2f}s")
                 except Exception as e:
-                    _log.warning(f"[GRADE] PDF generation skipped (memory): {str(e)}")
+                    _log.warning(f"[GRADE] PDF generation skipped: {str(e)}")
+            else:
+                _log.info(f"[GRADE] Step 3 (generate PDF): SKIPPED (mem={mem['rss_mb']:.1f}MB)")
 
             print(f"[GRADE DEBUG] FINAL score={score} total_marks={total_marks}")
 
+            # Step 4: Update database
+            step4_start = time.time()
             _submissions.update_one(
                 {"exam_id": exam_oid, "user_id": user_oid},
                 {"$set": {
@@ -451,8 +499,11 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
                     **({} if pdf_url is None else {"pdf_url": pdf_url}),
                 }},
             )
+            step4_time = time.time() - step4_start
+            _log.info(f"[GRADE] Step 4 (update DB): {step4_time:.2f}s")
             
-            # Emit Socket.IO event to notify teachers of grading completion
+            # Step 5: Emit Socket.IO event
+            step5_start = time.time()
             try:
                 from app import socketio
                 user_data = user_doc if user_doc else {}
@@ -473,12 +524,14 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
                     "total_marks": total_marks,
                     "status": "graded",
                 }, room='teachers')  # type: ignore
+                step5_time = time.time() - step5_start
+                _log.info(f"[GRADE] Step 5 (emit event): {step5_time:.2f}s")
                 print(f"[SOCKET] emitted submission_graded for user {user_oid}")
             except Exception:
                 _log.exception("Failed to emit submission_graded event")
             
-            _log.info("Background grading complete for exam %s, user %s: %s/%s",
-                       exam_oid, user_oid, score, total_marks)
+            total_time = time.time() - start_time
+            _log.info(f"[GRADE] COMPLETE for exam {exam_oid}, user {user_oid} in {total_time:.2f}s: {score}/{total_marks}")
     except Exception:
         _log.exception("Background grading failed for exam %s", exam_oid)
         # Mark as graded with error so the frontend doesn't poll forever
