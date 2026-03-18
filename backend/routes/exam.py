@@ -522,6 +522,7 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
                     "studentId": user_data.get("studentId", ""),
                     "score": score,
                     "total_marks": total_marks,
+                    "is_graded": True,
                     "status": "graded",
                 }, room='teachers')  # type: ignore
                 step5_time = time.time() - step5_start
