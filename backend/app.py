@@ -94,29 +94,42 @@ socketio = SocketIO(
     async_mode="threading",
     logger=_debug_mode,
     engineio_logger=_debug_mode,
-    ping_timeout=30,           # Close idle connections after 30s
-    ping_interval=15,          # Send ping every 15s to detect dead connections
+    ping_timeout=20,           # Aggressively close idle connections after 20s
+    ping_interval=10,          # Send ping every 10s to detect dead connections
     max_http_buffer_size=1000000,  # 1MB buffer for large messages
 )
 from routes import socket_events  # noqa: F401
 
 # ── Graceful shutdown for Socket.IO ─────────────────────────────────────────────
+_shutdown_in_progress = False
+
 def _close_socketio_connections():
     """Close all active Socket.IO connections on shutdown."""
+    global _shutdown_in_progress
+    if _shutdown_in_progress:
+        return
+    _shutdown_in_progress = True
+    
     try:
         _startup_log.info("[SHUTDOWN] Closing Socket.IO connections...")
-        # Emit disconnect event to all connected clients
-        socketio.emit('server_shutdown', {'message': 'Server is shutting down'}, namespace='/')
-        _startup_log.info("[SHUTDOWN] Socket.IO disconnect message sent")
+        # Broadcast shutdown event to all connected clients
+        try:
+            socketio.emit('server_shutdown', 
+                         {'message': 'Server is shutting down'}, 
+                         namespace='/')
+            _startup_log.info("[SHUTDOWN] Shutdown notification sent")
+        except Exception as e:
+            _startup_log.warning(f"[SHUTDOWN] Could not emit shutdown event: {e}")
+        _startup_log.info("[SHUTDOWN] Socket.IO shutdown complete")
     except Exception as e:
-        _startup_log.warning(f"[SHUTDOWN] Error closing Socket.IO: {e}")
+        _startup_log.warning(f"[SHUTDOWN] Error during Socket.IO shutdown: {e}")
 
 # Register handler for both normal exit and signals
 atexit.register(_close_socketio_connections)
 
 def _shutdown_signal_handler(signum, frame):
     """Handle SIGTERM/SIGINT for graceful shutdown."""
-    _startup_log.info(f"[SHUTDOWN] Received signal {signum}, closing connections...")
+    _startup_log.info(f"[SHUTDOWN] Received signal {signum}")
     _close_socketio_connections()
     sys.exit(0)
 
