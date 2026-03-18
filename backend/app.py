@@ -74,13 +74,8 @@ socketio = SocketIO(
     app,
     cors_allowed_origins=_allowed_origins,
     async_mode="threading",
-    allowEIO3=True,
-    # On free tier production, use polling only (WebSocket upgrade fails)
-    transports=['polling'] if _is_production else ['websocket', 'polling'],
     logger=_debug_mode,
     engineio_logger=_debug_mode,
-    ping_timeout=60,
-    ping_interval=25,
 )
 from routes import socket_events  # noqa: F401
 
