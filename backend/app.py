@@ -88,15 +88,21 @@ limiter = Limiter(
 _debug_mode = os.getenv("FLASK_DEBUG", "false").lower() == "true"
 # Use polling only on free tier (WebSocket has issues on Render free tier with HTTPS)
 _is_production = os.getenv("RENDER", "false").lower() == "true"
+
+# On Render, force polling-only mode (WebSocket unreliable on free tier)
+_allowed_transports = ["polling"] if _is_production else ["websocket", "polling"]
+
 socketio = SocketIO(
     app,
     cors_allowed_origins=_allowed_origins,
     async_mode="threading",
     logger=_debug_mode,
     engineio_logger=_debug_mode,
-    ping_timeout=20,           # Aggressively close idle connections after 20s
-    ping_interval=10,          # Send ping every 10s to detect dead connections
-    max_http_buffer_size=1000000,  # 1MB buffer for large messages
+    transports=_allowed_transports,           # Force polling on Render
+    ping_timeout=60,                          # Close idle connections after 60s (increased for stability)
+    ping_interval=25,                         # Send ping every 25s
+    max_http_buffer_size=10000000,            # 10MB buffer for large messages
+    upgrade_timeout=10,                       # Allow 10s for transport upgrade
 )
 from routes import socket_events  # noqa: F401
 
