@@ -1,49 +1,15 @@
-from flask_socketio import join_room, leave_room, disconnect, emit
+from flask_socketio import join_room, leave_room, emit
 from flask_jwt_extended import decode_token
+from flask import request as flask_request
 from app import socketio
-import os
 import logging
 
 _log = logging.getLogger(__name__)
-_jwt_secret = os.getenv("JWT_SECRET_KEY", "")
-
-
-def _authenticate_socket(sid, data=None):
-    """Authenticate Socket.IO connection by validating JWT from cookies."""
-    try:
-        # Get the token from cookies via the handshake
-        token = None
-        cookies = {}
-        
-        # Extract token from request cookies
-        environ = getattr(socketio.server.environ, 'get', {})
-        if isinstance(environ, dict):
-            # Flask-SocketIO passes request info differently
-            pass
-        
-        # Try to get token from session or cookies
-        # In Flask-SocketIO, we can access cookies via request context
-        from flask import request as flask_request
-        token = flask_request.cookies.get('access_token_cookie')
-        
-        if not token:
-            _log.warning(f"[SOCKET] No JWT token found for connection {sid}")
-            return False
-        
-        # Verify the token
-        decoded = decode_token(token)
-        _log.info(f"[SOCKET] Authenticated user {decoded['sub']} for connection {sid}")
-        return True
-        
-    except Exception as e:
-        _log.warning(f"[SOCKET] Authentication failed for connection {sid}: {str(e)}")
-        return False
 
 
 @socketio.on('connect')
 def on_connect(auth):
     """Handle Socket.IO connection with JWT authentication."""
-    from flask import request as flask_request
     try:
         # Get token from cookies
         token = flask_request.cookies.get('access_token_cookie')
@@ -67,9 +33,6 @@ def on_connect(auth):
 def on_join_teacher():
     """Join teacher room (broadcast updates to all teachers)."""
     try:
-        from flask_jwt_extended import get_jwt_identity
-        from flask import request as flask_request
-        
         # Validate JWT
         token = flask_request.cookies.get('access_token_cookie')
         if not token:
