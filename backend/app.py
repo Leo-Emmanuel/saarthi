@@ -105,7 +105,6 @@ socketio = SocketIO(
     ping_interval=25,                         # Send ping every 25s
     max_http_buffer_size=10000000,            # 10MB buffer for large messages
     http_compression=False,                   # Disable compression (can cause 400s)
-    manage_ack=True,                          # Properly manage message acknowledgments
 )
 
 from routes import socket_events  # noqa: F401
