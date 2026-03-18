@@ -375,6 +375,27 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
                     **({} if pdf_url is None else {"pdf_url": pdf_url}),
                 }},
             )
+            
+            # Emit Socket.IO event to notify teachers of grading completion
+            try:
+                from app import socketio
+                user_data = user_doc if user_doc else {}
+                exam_data = exam_doc if exam_doc else {}
+                socketio.emit('submission_graded', {
+                    "_id": str(_submissions.find_one({"exam_id": exam_oid, "user_id": user_oid}).get("_id", "")),
+                    "examId": str(exam_oid),
+                    "examTitle": exam_data.get("title", ""),
+                    "studentName": user_data.get("name", "Unknown"),
+                    "studentEmail": user_data.get("email") or user_data.get("studentId") or "Unknown",
+                    "studentId": user_data.get("studentId", ""),
+                    "score": score,
+                    "total_marks": total_marks,
+                    "status": "graded",
+                }, room='teachers')
+                print(f"[SOCKET] emitted submission_graded for user {user_oid}")
+            except Exception:
+                _log.exception("Failed to emit submission_graded event")
+            
             _log.info("Background grading complete for exam %s, user %s: %s/%s",
                        exam_oid, user_oid, score, total_marks)
         except Exception:

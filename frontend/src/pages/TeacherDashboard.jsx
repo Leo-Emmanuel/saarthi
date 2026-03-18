@@ -42,7 +42,14 @@ export default function TeacherDashboard() {
         });
     }, []);
 
-    const { connected: socketConnected } = useTeacherSocket(handleNewSubmission);
+    const handleSubmissionGraded = useCallback((submission) => {
+        console.log('[SOCKET] received submission_graded', submission);
+        setSubmissions(prev =>
+            prev.map(s => s._id === submission._id ? { ...s, ...submission } : s)
+        );
+    }, []);
+
+    const { connected: socketConnected } = useTeacherSocket(handleNewSubmission, handleSubmissionGraded);
 
     const filteredSubmissions = useMemo(() => {
         return submissions
