@@ -9,24 +9,14 @@ _log = logging.getLogger(__name__)
 
 @socketio.on('connect')
 def on_connect(auth):
-    """Handle Socket.IO connection with JWT authentication."""
+    """Handle Socket.IO connection."""
     try:
-        # Get token from cookies
-        token = flask_request.cookies.get('access_token_cookie')
-        
-        if not token:
-            _log.warning(f"[SOCKET] connect: No JWT token in cookies")
-            return False  # Reject connection
-        
-        # Verify the token
-        decoded = decode_token(token)
-        user_id = decoded.get('sub')
-        _log.info(f"[SOCKET] connect: Authenticated user {user_id}")
-        return True  # Accept connection
+        _log.info(f"[SOCKET] New connection attempt")
+        return True  # Accept connection, validate auth on join_teacher instead
         
     except Exception as e:
-        _log.warning(f"[SOCKET] connect: JWT validation failed: {str(e)}")
-        return False  # Reject connection
+        _log.exception(f"[SOCKET] connect failed: {str(e)}")
+        return False
 
 
 @socketio.on('join_teacher')
