@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
+import { FILE_ORIGIN } from '../config/fileOrigin';
 
 export function useTeacherSocket(onNewSubmission) {
     const socketRef = useRef(null);
     const onNewSubmissionRef = useRef(onNewSubmission);
     const [connected, setConnected] = useState(false);
-    const socketUrl = import.meta.env.VITE_SOCKET_URL
-        || `${window.location.protocol}//${window.location.hostname}:5000`;
+    const socketUrl = import.meta.env.VITE_SOCKET_URL || FILE_ORIGIN;
 
     useEffect(() => {
         onNewSubmissionRef.current = onNewSubmission;
