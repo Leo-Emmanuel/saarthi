@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import threading
+import psutil  # type: ignore
 from typing import Any
 from bson import ObjectId
 from datetime import datetime, timezone
@@ -31,6 +32,59 @@ _exams = db.exams
 _submissions = db.submissions
 _users = db.users
 _log = logging.getLogger(__name__)
+
+# ── Memory monitoring & grading queue ────────────────────────────────────────
+_active_grading_tasks = 0  # Limit concurrent grading to 1 per worker
+_max_concurrent_grading = 1
+_grading_lock = threading.Lock()
+
+
+def _get_memory_usage() -> dict:
+    """Get current process memory usage."""
+    try:
+        proc = psutil.Process(os.getpid())
+        mem_info = proc.memory_info()
+        return {
+            "rss_mb": mem_info.rss / 1024 / 1024,  # Resident set size (physical memory)
+            "vms_mb": mem_info.vms / 1024 / 1024,  # Virtual memory size
+            "percent": proc.memory_percent(),  # Percentage of system memory
+        }
+    except Exception as e:
+        _log.warning(f"Failed to get memory info: {e}")
+        return {"rss_mb": 0, "vms_mb": 0, "percent": 0}
+
+
+def _log_memory_status(context: str = ""):
+    """Log current memory usage."""
+    mem = _get_memory_usage()
+    context_str = f" [{context}]" if context else ""
+    _log.info(f"[MEMORY] RSS={mem['rss_mb']:.1f}MB VMS={mem['vms_mb']:.1f}MB {mem['percent']:.1f}%{context_str}")
+    
+    # Warn if memory usage is high (>70% or >50MB on free tier)
+    if mem["rss_mb"] > 50:
+        _log.warning(f"⚠️  High memory usage detected: {mem['rss_mb']:.1f}MB")
+
+
+def _can_start_grading() -> bool:
+    """Check if we can start a new grading task."""
+    global _active_grading_tasks
+    
+    with _grading_lock:
+        if _active_grading_tasks >= _max_concurrent_grading:
+            _log.warning(f"[GRADE] Grading queue full: {_active_grading_tasks}/{_max_concurrent_grading}")
+            return False
+        _active_grading_tasks += 1
+        _log.info(f"[GRADE] Starting grading task: {_active_grading_tasks}/{_max_concurrent_grading}")
+        return True
+
+
+def _finish_grading():
+    """Mark a grading task as complete."""
+    global _active_grading_tasks
+    
+    with _grading_lock:
+        _active_grading_tasks = max(0, _active_grading_tasks - 1)
+        _log.info(f"[GRADE] Grading task complete: {_active_grading_tasks}/{_max_concurrent_grading}")
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -349,9 +403,22 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
     """Run grading + PDF generation in a background thread.
 
     Uses app.app_context() since Flask context is not available in threads.
+    Includes memory monitoring and grading queue management.
     """
-    with app.app_context():
-        try:
+    # Check if we can start grading
+    if not _can_start_grading():
+        _log.warning(f"[GRADE] Could not start grading for exam {exam_oid}, user {user_oid} - queue full")
+        with app.app_context():
+            _submissions.update_one(
+                {"exam_id": exam_oid, "user_id": user_oid},
+                {"$set": {"status": "graded", "score": 0, "total_marks": 0}},
+            )
+        return
+    
+    try:
+        with app.app_context():
+            _log_memory_status("GRADE_START")
+            
             exam_doc = _exams.find_one({"_id": exam_oid})
             user_doc = _users.find_one({"_id": user_oid})
 
@@ -359,12 +426,18 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
             if exam_doc and exam_doc.get("questions"):
                 score, total_marks = _grade_answers(exam_doc["questions"], answers_raw)
 
-            # Generate PDF (non-critical)
+            _log_memory_status("GRADE_COMPLETE")
+            
+            # Generate PDF (non-critical, skip on memory pressure)
             pdf_url = None
-            if exam_doc and user_doc:
-                pdf_url = _generate_submission_pdf(
-                    user_doc, exam_doc, str(exam_oid), answers_raw, score, total_marks,
-                )
+            mem = _get_memory_usage()
+            if exam_doc and user_doc and mem["rss_mb"] < 60:  # Only generate PDF if memory allows
+                try:
+                    pdf_url = _generate_submission_pdf(
+                        user_doc, exam_doc, str(exam_oid), answers_raw, score, total_marks,
+                    )
+                except Exception as e:
+                    _log.warning(f"[GRADE] PDF generation skipped (memory): {str(e)}")
 
             print(f"[GRADE DEBUG] FINAL score={score} total_marks={total_marks}")
 
@@ -406,13 +479,17 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
             
             _log.info("Background grading complete for exam %s, user %s: %s/%s",
                        exam_oid, user_oid, score, total_marks)
-        except Exception:
-            _log.exception("Background grading failed for exam %s", exam_oid)
-            # Mark as graded with error so the frontend doesn't poll forever
+    except Exception:
+        _log.exception("Background grading failed for exam %s", exam_oid)
+        # Mark as graded with error so the frontend doesn't poll forever
+        with app.app_context():
             _submissions.update_one(
                 {"exam_id": exam_oid, "user_id": user_oid},
                 {"$set": {"status": "graded", "score": 0, "total_marks": 0}},
             )
+    finally:
+        _finish_grading()
+        _log_memory_status("GRADE_END")
 
 
 # ── Route handlers ────────────────────────────────────────────────────────────
@@ -659,6 +736,8 @@ def submit_exam(exam_id):
     Fix 5: writes answers in structured array format.
     Fix 7: when final=true, returns 202 and grades asynchronously.
     """
+    _log_memory_status(f"SUBMIT_START for exam {exam_id}")
+    
     data: dict[str, Any] = request.validated_data  # type: ignore
 
     exam_oid = _safe_object_id(exam_id)
@@ -705,6 +784,7 @@ def submit_exam(exam_id):
 
         # ── For partial saves, return immediately (no scores) ─────────────
         if not is_final:
+            _log_memory_status(f"SUBMIT_END (final=false, partial save)")
             return jsonify({"message": "Progress saved"}), 201
 
         # ── Fix 7: Final submission → async grading ───────────────────────
@@ -761,10 +841,12 @@ def submit_exam(exam_id):
         except Exception:
             _log.exception("Failed to emit submission socket event")
 
+        _log_memory_status(f"SUBMIT_END (final=true)")
         return jsonify({"message": "Exam submitted — grading in progress", "status": "grading"}), 202
 
     except Exception:
         _log.exception("Submission failed for exam %s", exam_id)
+        _log_memory_status(f"SUBMIT_ERROR")
         return jsonify({"error": "Submission failed"}), 500
 
 
