@@ -29,13 +29,30 @@ export default function TeacherDashboard() {
         }
     }, []);
 
-    // Auto-refresh pending submissions every 2 seconds while grading is in progress
+    // Auto-refresh pending submissions every 5 seconds while grading is in progress
     useEffect(() => {
         fetchSubmissions();
         
-        const hasPendingSubmissions = (subs) => subs.some(s => !s.is_graded && s.status !== 'submitted');
+        const hasPendingSubmissions = (subs) => {
+            return subs.some(s => {
+                const normalized = normalizeSubmission(s);
+                return !normalized.is_graded;
+            });
+        };
+        
+        let attemptCount = 0;
+        const maxAttempts = 30; // Stop polling after 30 attempts (2.5 minutes max)
         
         pollIntervalRef.current = setInterval(async () => {
+            attemptCount++;
+            
+            // Safety: stop polling after max attempts
+            if (attemptCount >= maxAttempts) {
+                clearInterval(pollIntervalRef.current);
+                pollIntervalRef.current = null;
+                return;
+            }
+            
             try {
                 const res = await api.get('/evaluation/submissions');
                 const items = res.data.items || res.data;
@@ -49,7 +66,7 @@ export default function TeacherDashboard() {
             } catch (err) {
                 console.error('Poll error:', err);
             }
-        }, 2000);
+        }, 5000); // Poll every 5 seconds instead of 2
 
         return () => {
             if (pollIntervalRef.current) {
