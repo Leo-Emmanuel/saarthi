@@ -7,7 +7,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 load_dotenv()  # Load environment variables first
 
-from flask import Flask, request, jsonify, make_response
+from flask import Flask, request, jsonify, make_response, g
 from flask_jwt_extended import JWTManager
 from flask_cors import CORS
 from flask_limiter import Limiter
@@ -44,13 +44,13 @@ app.config["JWT_SECRET_KEY"] = _secret_key
 @app.before_request
 def _request_timeout_guard():
     """Store request start time for timeout detection."""
-    request.start_time = time.time()
+    g.start_time = time.time()
 
 @app.after_request
 def _check_request_timeout(response):
     """Log warning if request took >40s (close to timeout)."""
-    if hasattr(request, 'start_time'):
-        elapsed = time.time() - request.start_time
+    if hasattr(g, 'start_time'):
+        elapsed = time.time() - g.start_time
         if elapsed > 40:
             _startup_log.warning(f"⚠️  Slow request: {request.method} {request.path} took {elapsed:.1f}s")
     return response
