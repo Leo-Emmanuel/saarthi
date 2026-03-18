@@ -7,7 +7,8 @@ export function normalizeSubmission(sub) {
         exam_title: sub.exam_title || sub.examTitle || sub.exam?.title || sub.exam_name || sub.exam_id || '',
         submitted_at: sub.submitted_at || sub.submittedAt || sub.last_updated,
         is_graded: Boolean(sub.is_graded) || sub.status === 'graded',
-        total_marks: sub.total_marks ?? sub.score ?? 0,
+        status: sub.status || 'submitted',
+        total_marks: sub.total_marks ?? sub.totalMarks ?? 0,
     };
 }
 

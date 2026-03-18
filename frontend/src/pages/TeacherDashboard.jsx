@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import api from '../config/axios';
 import { Link } from 'react-router-dom';
 import usePageTitle from '../hooks/usePageTitle';
@@ -13,6 +13,7 @@ export default function TeacherDashboard() {
     const [fetchError, setFetchError] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
     const [searchTerm, setSearchTerm] = useState('');
+    const pollIntervalRef = useRef(null);
 
     const fetchSubmissions = useCallback(async () => {
         setLoading(true);
@@ -28,8 +29,33 @@ export default function TeacherDashboard() {
         }
     }, []);
 
+    // Auto-refresh pending submissions every 2 seconds while grading is in progress
     useEffect(() => {
         fetchSubmissions();
+        
+        const hasPendingSubmissions = (subs) => subs.some(s => !s.is_graded && s.status !== 'submitted');
+        
+        pollIntervalRef.current = setInterval(async () => {
+            try {
+                const res = await api.get('/evaluation/submissions');
+                const items = res.data.items || res.data;
+                setSubmissions(items);
+                
+                // Stop polling if no pending submissions
+                if (!hasPendingSubmissions(items)) {
+                    clearInterval(pollIntervalRef.current);
+                    pollIntervalRef.current = null;
+                }
+            } catch (err) {
+                console.error('Poll error:', err);
+            }
+        }, 2000);
+
+        return () => {
+            if (pollIntervalRef.current) {
+                clearInterval(pollIntervalRef.current);
+            }
+        };
     }, [fetchSubmissions]);
 
     const handleNewSubmission = useCallback((submission) => {
