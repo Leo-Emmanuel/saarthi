@@ -269,11 +269,18 @@ export default function ExamView() {
             }
 
             if (res?.status === 202 || res?.data?.status === 'grading') {
-                if (mountedRef.current) pollUntilFinalized();
+                console.log('[submitExam] Status 202/grading, starting polling and waiting for completion...');
+                // CRITICAL FIX: Wait for polling to complete before navigating
+                // pollUntilFinalized will call navigate('/login') when grading finishes or times out
+                if (mountedRef.current) {
+                    pollUntilFinalized();
+                }
+                // DO NOT navigate here - let polling handle it
+                return;
             }
 
-            // Always navigate - outside mountedRef check
-            console.log('[submitExam] navigating to /login');
+            // Immediate result (status already graded)
+            console.log('[submitExam] Immediate graded result, navigating to /login');
             setTimeout(() => { window.location.href = '/login'; }, 1500);
             return;
         } catch (err) {
