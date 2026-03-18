@@ -710,7 +710,7 @@ def submit_exam(exam_id):
         app = current_app._get_current_object()
         thread = threading.Thread(
             target=_grade_in_background,
-            args=(app, exam_oid, user_oid, answers),
+            args=(app, exam_oid, user_oid, answers_raw),
             daemon=True,
         )
         thread.start()
