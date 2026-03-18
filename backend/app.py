@@ -1,6 +1,7 @@
 import os
 import sys
 import logging
+import time
 from datetime import datetime
 
 from dotenv import load_dotenv
@@ -38,6 +39,21 @@ if not _secret_key:
     )
 app.secret_key = _secret_key
 app.config["JWT_SECRET_KEY"] = _secret_key
+
+# Request timeout protection (Gunicorn timeout is 60s, so abort at 50s)
+@app.before_request
+def _request_timeout_guard():
+    """Store request start time for timeout detection."""
+    request.start_time = time.time()
+
+@app.after_request
+def _check_request_timeout(response):
+    """Log warning if request took >40s (close to timeout)."""
+    if hasattr(request, 'start_time'):
+        elapsed = time.time() - request.start_time
+        if elapsed > 40:
+            _startup_log.warning(f"⚠️  Slow request: {request.method} {request.path} took {elapsed:.1f}s")
+    return response
 
 _startup_log = logging.getLogger("startup")
 
