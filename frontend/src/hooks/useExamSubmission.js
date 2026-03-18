@@ -74,17 +74,23 @@ export default function useExamSubmission({
         }
         try {
             setIsSubmitting(true);
+            console.log(`[SUBMIT] Submitting exam ${id} with final=${isFinal}`);
             const res = await api.post(`/exam/${id}/submit`, {
                 answers: answersRef.current,
                 audio_files: audioFilesRef.current,
                 final: isFinal,
             });
-            if (!isFinal) return;
+            console.log(`[SUBMIT] Response status:`, res.status, 'data:', res.data);
+            if (!isFinal) {
+                console.log(`[SUBMIT] Not final submission, returning`);
+                return;
+            }
 
             // Direct auto-grade result
             if (res.data?.status === 'graded') {
                 const score = res.data.score || 0;
                 const totalMarks = res.data.total_marks || 0;
+                console.log(`[SUBMIT] ✅ Immediate graded result: ${score}/${totalMarks}`);
                 speak?.(`Your exam has been graded. Your score is ${score} out of ${totalMarks}.`);
                 accessibleAlert(`Your exam has been graded. Score: ${score}/${totalMarks}`, speak);
                 navigate('/student');
@@ -92,39 +98,54 @@ export default function useExamSubmission({
             }
 
             if (res.status === 202 || res.data?.status === 'grading') {
+                console.log(`[SUBMIT] Status 202/grading, starting polling...`);
                 setGradingStatus('grading');
                 let attempts = 0;
                 const poll = async () => {
-                    if (!mountedRef.current) return;
+                    if (!mountedRef.current) {
+                        console.log(`[SUBMIT_POLL] Component unmounted, stopping`);
+                        return;
+                    }
                     try {
+                        console.log(`[SUBMIT_POLL] Attempt ${attempts + 1} checking status...`);
                         const status = await api.get(`/exam/${id}/submission/status`);
+                        console.log(`[SUBMIT_POLL] Got status:`, status.data?.status, 'score:', status.data?.score);
                         if (status.data?.status === 'graded') {
                             const score = status.data.score || 0;
                             const totalMarks = status.data.total_marks || 0;
+                            console.log(`[SUBMIT_POLL] ✅ Graded! Score: ${score}/${totalMarks}`);
                             // FIX 15: Speak the score result for blind students
                             speak?.(`Your exam has been graded. Your score is ${score} out of ${totalMarks}.`);
                             accessibleAlert(`Your exam has been graded. Score: ${score}/${totalMarks}`, speak);
                             navigate('/student');
                             return;
                         }
-                    } catch {
+                    } catch (err) {
+                        console.error(`[SUBMIT_POLL] Error on attempt ${attempts + 1}:`, err);
                         // ignore polling errors
                     }
                     attempts += 1;
-                    gradingPollRef.current = setTimeout(poll, Math.min(3000 * (attempts + 1), 15000));
+                    const nextDelay = Math.min(3000 * (attempts + 1), 15000);
+                    console.log(`[SUBMIT_POLL] Scheduling next attempt in ${nextDelay}ms`);
+                    gradingPollRef.current = setTimeout(poll, nextDelay);
                 };
                 gradingPollRef.current = setTimeout(poll, 3000);
-                gradingTimeoutRef.current = setTimeout(() => navigate('/student'), 120000);
+                gradingTimeoutRef.current = setTimeout(() => {
+                    console.log(`[SUBMIT_POLL] 120s timeout reached, navigating to /student`);
+                    navigate('/student');
+                }, 120000);
                 return;
             }
 
             const score = res.data?.score || 0;
             const totalMarks = res.data?.total_marks || 0;
+            console.log(`[SUBMIT] Default response, score: ${score}/${totalMarks}`);
             // FIX 15: Speak the score
             speak?.(`Exam submitted! Your score is ${score} out of ${totalMarks}.`);
             accessibleAlert(`Exam submitted! Score: ${score}/${totalMarks}`, speak);
             navigate('/student');
         } catch (error) {
+            console.error('[SUBMIT] Submission failed:', error);
             // FIX 15: Speak the failure so blind students are not left guessing
             speak?.('Warning: your answer could not be saved. Please check your connection and try again.');
             console.error('[useExamSubmission] submission failed:', error);

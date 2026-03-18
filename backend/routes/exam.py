@@ -1026,6 +1026,7 @@ def get_submission_status(exam_id):
     exam_oid = _safe_object_id(exam_id)
     user_oid = _safe_object_id(get_jwt_identity())
     if not exam_oid or not user_oid:
+        _log.warning(f"[STATUS_POLL] Invalid IDs: exam_oid={exam_oid}, user_oid={user_oid}")
         return jsonify({"error": "Invalid IDs"}), 400
 
     sub = _submissions.find_one(
@@ -1033,15 +1034,18 @@ def get_submission_status(exam_id):
         {"status": 1, "score": 1, "total_marks": 1, "tab_violations": 1, "flagged": 1},
     )
     if not sub:
+        _log.warning(f"[STATUS_POLL] No submission found for exam {exam_id}, user {user_oid}")
         return jsonify({"error": "Submission not found"}), 404
 
-    return jsonify({
+    result = {
         "status": sub.get("status", "unknown"),
         "score": sub.get("score"),
         "total_marks": sub.get("total_marks"),
         "tab_violations": sub.get("tab_violations", []),
         "flagged": sub.get("flagged", False),
-    })
+    }
+    _log.debug(f"[STATUS_POLL] Returning status for exam {exam_id}: {result}")
+    return jsonify(result)
 
 
 @exam_bp.route("/<exam_id>", methods=["DELETE"])
