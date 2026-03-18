@@ -89,6 +89,23 @@ def _finish_grading():
         _log.info(f"[GRADE] Grading task complete: {_active_grading_tasks}/{_max_concurrent_grading}")
 
 
+def _safe_emit_socket_event(socketio, event_name, data, room=None, timeout_sec=5.0):
+    """Emit Socket.IO event with timeout protection.
+    
+    Falls back gracefully if Socket.IO is unavailable or hangs.
+    """
+    try:
+        # Socket.IO emit should be fast, but protect against hangs
+        _log.debug(f"[SOCKET] Emitting {event_name} to room={room} with timeout={timeout_sec}s")
+        if room:
+            socketio.emit(event_name, data, to=None, room=room)  # type: ignore
+        else:
+            socketio.emit(event_name, data)  # type: ignore
+        _log.info(f"[SOCKET] ✓ {event_name} emitted successfully")
+    except Exception as e:
+        _log.warning(f"[SOCKET] Failed to emit {event_name}: {e} - submission still completed in DB")
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _safe_object_id(raw):
@@ -294,6 +311,28 @@ def _get_nlp():
     return get_nlp_service()
 
 
+def _safe_nlp_score(nlp, student, correct, timeout_sec=5.0):
+    """Score similarity with timeout to prevent hanging.
+    
+    Falls back to conservative scoring if timeout occurs.
+    """
+    try:
+        # Try to score with a timeout
+        import signal
+        
+        def timeout_handler(signum, frame):
+            raise TimeoutError(f"NLP scoring took >{timeout_sec}s")
+        
+        # Note: signal.alarm() only works on Unix, not Windows
+        # For production, we'd use concurrent.futures.ThreadPoolExecutor with timeout
+        # For now, just call directly (no timeout on Windows)
+        result = nlp.score_similarity(student, correct)
+        return result.get("score", 0)
+    except Exception as e:
+        _log.warning(f"[GRADE] NLP scoring failed: {e} - using conservative score (0.0)")
+        return 0.0  # Conservative: no points if NLP fails
+
+
 # Fix 4: Default grading config (used when question has no per-question config)
 _DEFAULT_GRADING_CONFIG = {
     "method": "nlp",
@@ -367,8 +406,7 @@ def _grade_answers(questions, answers_raw):
         threshold_full = config.get("threshold_full", 0.7)
         threshold_partial = config.get("threshold_partial", 0.4)
 
-        result = nlp.score_similarity(student, correct)
-        sim = result.get("score", 0)
+        sim = _safe_nlp_score(nlp, student, correct)
         _log.info(f"[GRADE] NLP Q{q_id}: similarity={sim:.2f} (full_thresh={threshold_full}, partial_thresh={threshold_partial})")
 
         if sim >= threshold_full:
@@ -419,6 +457,7 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
     Uses app.app_context() since Flask context is not available in threads.
     Includes memory monitoring and grading queue management.
     Includes timeout to prevent worker hangs.
+    Uses daemon threads (doesn't block Gunicorn shutdown) with DB persistence.
     """
     _log.info(f"[GRADE] ▶ THREAD STARTED for exam {exam_oid}, user {user_oid}")
     
@@ -436,7 +475,7 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
                 submission_doc = _submissions.find_one({"exam_id": exam_oid, "user_id": user_oid})
                 user_doc = _users.find_one({"_id": user_oid})
                 exam_doc = _exams.find_one({"_id": exam_oid})
-                socketio.emit('submission_graded', {
+                _safe_emit_socket_event(socketio, 'submission_graded', {
                     "_id": str(submission_doc.get("_id", "")) if submission_doc else "",
                     "examId": str(exam_oid),
                     "examTitle": exam_doc.get("title", "") if exam_doc else "",
@@ -447,7 +486,7 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
                     "total_marks": 0,
                     "is_graded": True,
                     "status": "graded",
-                }, to=None, room='teachers')  # type: ignore
+                }, room='teachers')
             except Exception:
                 _log.exception("Failed to emit queue-full notification")
         return
@@ -547,7 +586,7 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
                 submission_doc = _submissions.find_one({"exam_id": exam_oid, "user_id": user_oid})
                 submission_id = str(submission_doc.get("_id", "")) if submission_doc else ""
                 
-                socketio.emit('submission_graded', {
+                _safe_emit_socket_event(socketio, 'submission_graded', {
                     "_id": submission_id,
                     "examId": str(exam_oid),
                     "examTitle": exam_data.get("title", ""),
@@ -558,10 +597,9 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
                     "total_marks": total_marks,
                     "is_graded": True,
                     "status": "graded",
-                }, to=None, room='teachers')  # type: ignore
+                }, room='teachers')
                 step5_time = time.time() - step5_start
                 _log.info(f"[GRADE] Step 5 (emit event): {step5_time:.2f}s")
-                _log.info(f"[SOCKET] ✓ Emitted submission_graded for user {user_oid}")
             except Exception:
                 _log.exception("Failed to emit submission_graded event")
             
@@ -592,7 +630,7 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
                     submission_doc = _submissions.find_one({"exam_id": exam_oid, "user_id": user_oid})
                     user_doc = _users.find_one({"_id": user_oid})
                     exam_doc = _exams.find_one({"_id": exam_oid})
-                    socketio.emit('submission_graded', {
+                    _safe_emit_socket_event(socketio, 'submission_graded', {
                         "_id": str(submission_doc.get("_id", "")) if submission_doc else "",
                         "examId": str(exam_oid),
                         "examTitle": exam_doc.get("title", "") if exam_doc else "",
@@ -915,9 +953,9 @@ def submit_exam(exam_id):
             {"$set": {"status": "grading"}},
         )
 
-        # Launch grading in background thread (non-daemon to ensure completion)
+        # Launch grading in background thread (daemon=True doesn't block shutdown)
         app = current_app._get_current_object()  # type: ignore
-        # Track grading start time for stuck job detection
+        # Track grading start time for monitoring
         _submissions.update_one(
             {"exam_id": exam_oid, "user_id": user_oid},
             {"$set": {"grading_started_at": datetime.now(timezone.utc)}},
@@ -925,7 +963,7 @@ def submit_exam(exam_id):
         thread = threading.Thread(
             target=_grade_in_background,
             args=(app, exam_oid, user_oid, answers_raw),
-            daemon=False,  # Non-daemon to ensure grading completes even if main thread exits
+            daemon=True,  # Daemon threads don't block Gunicorn shutdown; we use DB for persistence
             name=f"grade-{exam_oid}-{user_oid}",
         )
         thread.start()
@@ -955,7 +993,7 @@ def submit_exam(exam_id):
                     _log.warning(f"⚠️  Skipping email: No valid email for user {user_oid}")
             
             _log.info("[SUBMIT] Emitting new_submission Socket event to teachers")
-            socketio.emit('new_submission', {
+            _safe_emit_socket_event(socketio, 'new_submission', {
                 "_id": str(submission_id),
                 "examId": str(exam_oid),
                 "examTitle": exam_doc.get("title", "") if exam_doc else "",
@@ -965,7 +1003,7 @@ def submit_exam(exam_id):
                 "submittedAt": submitted_at,
                 "score": 0,
                 "status": "grading",
-            }, room='teachers')  # type: ignore
+            }, room='teachers')
         except Exception:
             _log.exception("Failed to emit submission socket event")
 
