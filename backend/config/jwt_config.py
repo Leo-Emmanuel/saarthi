@@ -18,10 +18,13 @@ def configure_jwt(app):
     app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
 
     # ── Cookie flags ──────────────────────────────────────────────────────
-    # Secure=False for local dev (no HTTPS). Set True in production.
-    app.config["JWT_COOKIE_SECURE"] = os.getenv("JWT_COOKIE_SECURE", "false").lower() == "true"
-    # SameSite=None required for cross-origin requests (frontend ≠ backend domain)
-    app.config["JWT_COOKIE_SAMESITE"] = "None"
+    _is_secure = os.getenv("JWT_COOKIE_SECURE", "false").lower() == "true"
+    app.config["JWT_COOKIE_SECURE"] = _is_secure
+
+    # SameSite=None requires Secure=True (HTTPS) per browser spec — browsers
+    # silently DROP None cookies over plain HTTP, breaking local dev login.
+    # Use "Lax" for HTTP dev, "None" only in production where HTTPS is enforced.
+    app.config["JWT_COOKIE_SAMESITE"] = "None" if _is_secure else "Lax"
 
     # ── CSRF double-submit cookie ─────────────────────────────────────────
     # TEMPORARILY DISABLED for cross-origin deployment

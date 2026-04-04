@@ -40,9 +40,7 @@ def _try_correct_answer(line):
 def _flush_question(text, correct_answer=None, options=None):
     """Create a Question dict, optionally with a correct answer and options."""
     q_type = "mcq" if options else "text"
-    print(f"DEBUG: Creating question - type: {q_type}, options: {options}, text: {text[:50]}...")
     q = Question(text=text, type=q_type).to_dict()
-    print(f"DEBUG: Question dict created: {q}")
     if correct_answer:
         q["correct_answer"] = correct_answer
     if options:
@@ -144,29 +142,26 @@ def _parse_implicit(lines):
 
     for line in lines:
         line = line.strip()
-        print(f"DEBUG: Processing line: '{line}'")
-        
+
         # Option line → collect
         if _is_option_line(line):
-            print(f"DEBUG: Found option line: '{line}'")
             current_options.append(line)
             continue
-        
+
         # Correct answer → attach to the previous question
         ans = _try_correct_answer(line)
         if ans is not None:
             if questions:
                 questions[-1]["correct_answer"] = ans
             continue
-        
+
         # Skip section/instruction headers
         lower = line.lower()
         if lower.startswith("section") or lower.startswith("instructions"):
             continue
-        
+
         # Heuristic: substantial lines or lines ending with ? or :
         if line.endswith("?") or line.endswith(":") or len(line) > 10:
-            print(f"DEBUG: Flushing question with {len(current_options)} options")
             questions.append(_flush_question(line, None, current_options))
             current_options = []
 

@@ -295,10 +295,6 @@ def register_student():
                 "voice": saved_tts.get("voice", None),
             }
 
-        print(f"[REGISTER DEBUG] admin_user found: {admin_user is not None}")
-        print(f"[REGISTER DEBUG] system_settings: {admin_user.get('system_settings') if admin_user else 'N/A'}")
-        print(f"[REGISTER DEBUG] default_tts being applied: {default_tts}")
-
         student, error_msg = _register_student(
             name=data["name"],
             student_id=data["studentId"],

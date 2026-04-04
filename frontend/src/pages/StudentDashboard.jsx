@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../config/axios';
 import useExamVoiceGuidance from '../hooks/useExamVoiceGuidance';
+import { useAuth } from '../context/AuthContext';
 import StudentDashboardHeader from '../components/StudentDashboardHeader';
 import StudentExamCard from '../components/StudentExamCard';
 
@@ -13,6 +14,10 @@ export default function StudentDashboard() {
     const [loading, setLoading] = useState(true);
     const navigate = useNavigate();
     const fetchSeqRef = useRef(0);
+    const { user } = useAuth();
+    // Only enable voice auto-start for authenticated students.
+    // Admins or teachers who briefly land here must NOT activate STT.
+    const isStudent = user?.role === 'student';
 
     const fetchExams = useCallback(async () => {
         const fetchSeq = ++fetchSeqRef.current;
@@ -47,7 +52,7 @@ export default function StudentDashboard() {
     const { startVoiceGuidance } = useExamVoiceGuidance({
         exams,
         onChooseExam: navigateToExam,
-        autoStart: true,
+        autoStart: isStudent,   // ← Only auto-start STT for students
         isLoading: loading,
         onVoiceStart: () => setIsVoiceActive(true),
         onVoiceEnd: () => setIsVoiceActive(false),

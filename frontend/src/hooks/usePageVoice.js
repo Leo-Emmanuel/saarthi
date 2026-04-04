@@ -16,6 +16,33 @@ function getAnnouncement(pathname) {
   return null;
 }
 
+// Track whether the user has ever interacted with the page.
+// speechSynthesis.speak() requires a prior user gesture in modern browsers.
+let userHasActivated = false;
+
+function markUserActivated() {
+  userHasActivated = true;
+}
+
+// Register once at module load time — these events all count as user activation.
+['pointerdown', 'keydown', 'touchstart'].forEach((evt) => {
+  window.addEventListener(evt, markUserActivated, { once: false, capture: true, passive: true });
+});
+
+/**
+ * Speak text only if the user has previously interacted with the page.
+ * Falls back to navigator.userActivation when available (Chromium 72+).
+ */
+function safeSpeak(utterance) {
+  const activation = navigator.userActivation;
+  const isActive = activation ? activation.hasBeenActive : userHasActivated;
+  if (!isActive) {
+    console.info('[PageVoice] Skipping TTS — no user activation yet.');
+    return;
+  }
+  window.speechSynthesis.speak(utterance);
+}
+
 export default function usePageVoice() {
   const location = useLocation();
   const prevPathRef = useRef(null);
@@ -41,7 +68,7 @@ export default function usePageVoice() {
       utterance.rate = 1.0;
       utterance.pitch = 1.0;
       setTimeout(() => {
-        window.speechSynthesis.speak(utterance);
+        safeSpeak(utterance);
       }, 600);
     } catch (e) {
       console.error('[PageVoice] TTS error:', e);

@@ -8,13 +8,22 @@
 
 const USER_KEY = 'user';
 
-/** Ensure every user object has a consistent shape. */
-export function normaliseUser({ name, role, email, studentId } = {}) {
+/**
+ * Ensure every user object has a consistent shape.
+ *
+ * IMPORTANT: `role` is NOT defaulted to 'student'. Silently defaulting the
+ * role caused admins/teachers to be misrouted into the student dashboard,
+ * which triggered student-only voice STT/TTS in the background. If the
+ * server returns no role the value is preserved as null/undefined so that
+ * ProtectedRoute can handle it correctly (redirecting to /login).
+ */
+export function normaliseUser({ name, role, email, studentId, tts_settings } = {}) {
     return {
         name: name || '',
-        role: role || 'student',
+        role: role || null,   // Do NOT default to 'student' — preserves real role
         email: email || null,
         studentId: studentId || null,
+        tts_settings: tts_settings || null,
     };
 }
 

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Navigate } from 'react-router-dom';
+import { getPathForRole } from '../context/routePolicy';
 import { Mic, Volume2 } from 'lucide-react';
 import useTTS from '../hooks/useTTS';
 import usePageTitle from '../hooks/usePageTitle';
@@ -51,8 +52,14 @@ function processSpokenText(text, { digitsOnly = false, extraMap = {} } = {}) {
 // Steps: 0=Idle  1=Listening ID  2=Listening PIN  3=Verifying
 export default function VoiceLogin() {
     usePageTitle('Student Login');
-    const { pinLogin } = useAuth();
+    const { pinLogin, user } = useAuth();
     const navigate = useNavigate();
+
+    // If a non-student (admin, teacher) is already logged in, redirect them
+    // away immediately so NO voice/STT effects are ever triggered here.
+    if (user && user.role !== 'student') {
+        return <Navigate to={getPathForRole(user.role)} replace />;
+    }
 
     useEffect(() => {
         const announce = () => {

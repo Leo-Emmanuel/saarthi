@@ -261,23 +261,36 @@ def _compute_exam_type(questions: list) -> str:
 
 
 def _extract_mcq_letter(student_answer):
-    """Extract MCQ letter A-D from natural voice response."""
+    """Extract MCQ letter A-D from natural voice or typed response.
+
+    Handles:
+      - Bare letters: 'A', 'b', '(C)', 'C.'
+      - Prefixed: '(A) some text', 'A. some text'
+      - Natural voice: 'I think option A', 'it's B', 'answer is C'
+    """
     import re
     if not student_answer:
         return None
     text = student_answer.strip().upper()
-    
-    early_match = re.match(r'^\s*\(?([ABCD])[).]?\s+', text)
+
+    # Fast path: bare single letter (with optional wrapping punctuation)
+    # Handles 'A', '(A)', 'A.', 'B)'
+    bare_match = re.match(r'^\s*\(?([ABCD])[).\s]*$', text)
+    if bare_match:
+        return bare_match.group(1)
+
+    # Prefixed with optional paren/dot then optional trailing text
+    # Handles '(A) some text', 'A. some text', 'A) some text'
+    early_match = re.match(r'^\s*\(?([ABCD])[).]?\s*', text)
     if early_match:
         return early_match.group(1)
-        
+
     patterns = [
         r'\b(?:OPTION|ANSWER|LETTER|CHOICE)\s+([A-D])\b',
         r'\b([A-D])\s+IS\s+(?:CORRECT|RIGHT)\b',
         r'\bI\s+(?:THINK|CHOOSE|PICK|SAY)\s+([A-D])\b',
         r"(?:IT'?S|ITS)\s+([A-D])\b",
-        r'\b([A-D])[)\.]?\s*$',
-        r'^\s*([A-D])[)\.]?\s*$',
+        r'\b([A-D])[).\s]*$',
     ]
     for pattern in patterns:
         m = re.search(pattern, text)
@@ -382,11 +395,18 @@ def _grade_answers(questions, answers_raw):
             continue
 
         # ── MCQ: normalised single-letter comparison ──────────────────────
-        if q_type == "mcq":
+        # Use _is_mcq_like() rather than q_type == 'mcq' so that legacy
+        # questions stored with type='text' (but with options/correct_answer)
+        # are still graded correctly as MCQs.
+        if _is_mcq_like(q):
             extracted = _extract_mcq_letter(student)
+            # Fallback: if extractor returns None (e.g. simple stored 'A'),
+            # treat the entire student answer as a letter via _normalize_mcq.
+            if extracted is None:
+                extracted = _normalize_mcq(student) or None
             norm_correct = _normalize_mcq(correct)
             _log.debug(f"[GRADE] MCQ: extracted='{extracted}' vs correct='{norm_correct}'")
-            if extracted == norm_correct:
+            if extracted and extracted == norm_correct:
                 _log.info(f"[GRADE] MCQ Q{q_id}: ✓ correct ({marks} pts)")
                 score += marks
             else:

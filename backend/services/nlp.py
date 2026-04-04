@@ -16,6 +16,7 @@ import logging
 import re
 from difflib import SequenceMatcher
 from collections import Counter
+from typing import cast
 
 import nltk
 
@@ -283,7 +284,7 @@ class _SimilarityScorer:
 
         best = max(jaccard, seq_score)
         method = "token_overlap" if jaccard >= seq_score else "sequence"
-        return _sim_result(round(best, 3), method, norm_student, norm_correct)
+        return _sim_result(round(float(best), 3), method, norm_student, norm_correct)
 
 
 class _IntentDetector:
@@ -325,7 +326,7 @@ class _IntentDetector:
                 # FIX 10: Use word-boundary regex instead of substring 'in' check
                 # to prevent 'the next step in the reaction' matching 'next'
                 if re.search(r'\b' + re.escape(pattern) + r'\b', cleaned):
-                    score = min(len(pattern_words) / max(len(words), 1) + 0.3, 1.0)
+                    score = float(min(len(pattern_words) / max(len(words), 1) + 0.3, 1.0))
                     if score > best_score:
                         best_score = score
                         best_action = action
@@ -339,12 +340,12 @@ class _IntentDetector:
         if best_score >= self._COMMAND_THRESHOLD:
             return {
                 "intent": "command", "action": best_action,
-                "confidence": round(best_score, 2), "text": text.strip(),
+                "confidence": round(float(best_score), 2), "text": text.strip(),
             }
 
         return {
             "intent": "answer", "action": None,
-            "confidence": round(1.0 - best_score, 2), "text": text.strip(),
+            "confidence": round(float(1.0 - best_score), 2), "text": text.strip(),
         }
 
 
@@ -376,9 +377,9 @@ class _Summarizer:
             scored.append((i, score, sent))
 
         scored.sort(key=lambda x: x[1], reverse=True)
-        top = sorted(scored[:max_sentences], key=lambda x: x[0])
+        top = cast(list[tuple[int, float, str]], sorted(scored[:max_sentences], key=lambda x: x[0]))
         return {
-            "summary": " ".join(s[2] for s in top),
+            "summary": " ".join(sent for _, _score, sent in top),
             "sentence_count": len(sentences),
         }
 
@@ -397,7 +398,7 @@ class _KeywordExtractor:
 
         all_lower = [t.lower() for t in tokens if t.isalnum()]
         freq = Counter(all_lower)
-        max_freq = max(freq.values()) if freq else 1
+        max_freq: int = int(max(freq.values())) if freq else 1
 
         keywords = []
         seen = set()
@@ -416,13 +417,13 @@ class _KeywordExtractor:
                 is_relevant, relevance = True, 0.9
             elif pos.startswith("NN"):
                 is_relevant = True
-                relevance = freq.get(lower, 0) / max_freq * 0.8
+                relevance = int(freq.get(lower, 0)) / float(max_freq) * 0.8
             elif len(lower) == 1 and lower.isalpha() and lower not in stopwords:
                 is_relevant, relevance = True, 0.85
 
             if is_relevant and lower not in seen:
                 seen.add(lower)
-                keywords.append({"text": word, "pos": pos, "relevance": round(relevance, 2)})
+                keywords.append({"text": word, "pos": pos, "relevance": round(float(relevance), 2)})
 
         keywords.sort(key=lambda k: k["relevance"], reverse=True)
         return keywords
