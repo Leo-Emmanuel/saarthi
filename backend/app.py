@@ -72,10 +72,20 @@ if os.getenv("JWT_COOKIE_SECURE", "false").lower() != "true":
 configure_jwt(app)
 jwt = JWTManager(app)
 
-# ── CORS: allow credentials (cookies) from the Vite dev server ────────────────
-_raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
+# ── CORS: allow credentials (cookies) from the known frontend origins ─────────
+_default_origins = (
+    "http://localhost:5173,"
+    "http://127.0.0.1:5173,"
+    "https://saarthi-exam-platform.vercel.app"
+)
+_raw_origins = os.getenv("ALLOWED_ORIGINS", _default_origins)
 _allowed_origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
-CORS(app, supports_credentials=True, origins=_allowed_origins, allow_headers=['Content-Type', 'Authorization'])
+CORS(
+    app,
+    supports_credentials=True,
+    origins=_allowed_origins,
+    allow_headers=['Content-Type', 'Authorization'],
+)
 
 
 # ── Fix 3: Rate limiter (shared instance, imported by route modules) ──────────
@@ -96,6 +106,7 @@ _allowed_transports = ["polling"] if _is_production else ["websocket", "polling"
 socketio = SocketIO(
     app,
     cors_allowed_origins=_allowed_origins,
+    cors_credentials=True,
     async_mode="threading",
     logger=_debug_mode,
     engineio_logger=_debug_mode,
