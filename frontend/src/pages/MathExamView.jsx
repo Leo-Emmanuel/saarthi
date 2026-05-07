@@ -461,13 +461,19 @@ const MathExamView = () => {
         if (saved?.steps?.length > 0) {
             dispatch(loadSteps(saved.steps));
         } else {
-            dispatch(addStep({ ast: { type: 'Empty' }, latex: '' }));
+            dispatch(addStep({
+                ast: { type: 'Empty' },
+                latex: '',
+                id: `step_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+                timestamp: new Date().toISOString(),
+            }));
         }
         dispatch(startSession({
             examId: safeId,
             title: exam.title,
             duration: exam.duration,
             totalQuestions: exam.questions.length,
+            startedAt: new Date().toISOString(),
         }));
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [examLoading]);
@@ -512,24 +518,59 @@ const MathExamView = () => {
     // is typing quickly.
     const stepsRef = useRef(steps);
     const safeIdRef = useRef(safeId);
+    const examRef = useRef(exam);
     useEffect(() => { stepsRef.current = steps; }, [steps]);
     useEffect(() => { safeIdRef.current = safeId; }, [safeId]);
+    useEffect(() => { examRef.current = exam; }, [exam]);
 
     useEffect(() => {
         autoSaveRef.current = setInterval(() => {
             if (stepsRef.current.length > 0) {
                 saveToLocal(stepsRef.current, safeIdRef.current);
-                dispatch(recordAutoSave());
+                dispatch(recordAutoSave({ savedAt: new Date().toISOString() }));
             }
         }, 30_000);
         return () => clearInterval(autoSaveRef.current);
     }, [dispatch]);
 
     // ── Export & submit handlers ───────────────────────────────────────────────
-    const handleSubmit = useCallback(() => {
+    const handleSubmit = useCallback(async () => {
+        // Build answers payload from Redux steps.
+        // steps[i] is treated as the answer for questions[i] — each step's
+        // latex string maps to the corresponding question's _id.
+        const stepsSnapshot = stepsRef.current;
+        const questionsSnapshot = examRef.current?.questions ?? [];
+
+        const answers = {};
+        questionsSnapshot.forEach((q, idx) => {
+            const step = stepsSnapshot[idx];
+            if (q?._id && step) {
+                answers[String(q._id)] = step.latex || '';
+            }
+        });
+
+        // If no questions are linked (e.g. practice mode), serialise all
+        // steps into a single block so nothing is silently discarded.
+        const hasQuestions = questionsSnapshot.length > 0;
+        const submissionPayload = hasQuestions
+            ? { answers, final: true }
+            : { answers: { steps: JSON.stringify(stepsSnapshot) }, final: true };
+
+        try {
+            await api.post(`/exam/${safeId}/submit`, submissionPayload);
+        } catch (err) {
+            console.error('[MathExam] Submission API call failed:', err);
+            // Non-blocking — warn the student via TTS, then continue with
+            // local cleanup so they are never stuck on a broken state.
+            await getTTS().speakNow(
+                'Warning: there was a network error saving your answers. Please contact your invigilator.'
+            );
+        }
+
         dispatch(submitSession());
         clearLocal(safeId);
-        getTTS().speakNow('Your paper has been submitted. Returning to dashboard.').then(() => navigate('/student'));
+        await getTTS().speakNow('Your paper has been submitted. Returning to dashboard.');
+        navigate('/student');
     }, [dispatch, navigate, safeId]);
 
     // ── Voice controller ───────────────────────────────────────────────────────
@@ -796,7 +837,12 @@ const MathExamView = () => {
                         }}
                         onUndo={() => dispatch(undo())}
                         onRedo={() => dispatch(redo())}
-                        onNewStep={() => dispatch(addStep({ ast: { type: 'Empty' }, latex: '' }))}
+                        onNewStep={() => dispatch(addStep({
+                            ast: { type: 'Empty' },
+                            latex: '',
+                            id: `step_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+                            timestamp: new Date().toISOString(),
+                        }))}
                     />
                 </div>
             </div>

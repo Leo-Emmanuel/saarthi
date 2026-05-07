@@ -280,14 +280,17 @@ export default function ExamView() {
             }
 
             // Immediate result (status already graded)
-            console.log('[submitExam] Immediate graded result, navigating to /login');
-            setTimeout(() => { window.location.href = '/login'; }, 1500);
+            console.log('[submitExam] Immediate graded result, navigating to /student');
+            navigate('/student');
             return;
         } catch (err) {
             console.log('[submitExam] api.post FAILED:', err?.response?.status, err?.message);
             if (mountedRef.current) {
                 setError('Submission failed. Please try again.');
                 setSubmitting(false);
+                speak(
+                    'Submission failed due to a network error. Please check your connection and try again, or inform your invigilator.'
+                );
             }
         }
     }, [id, navigate, pollUntilFinalized, speak, stopTimer, submitting, submitted]);
