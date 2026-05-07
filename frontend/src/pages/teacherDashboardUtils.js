@@ -13,12 +13,13 @@ export function normalizeSubmission(sub) {
 }
 
 export function exportToCSV(items) {
-    const headers = ['Student Name', 'Student ID', 'Exam Title', 'Submitted At', 'Total Score', 'Status'];
+    const headers = ['Student Name', 'Student ID', 'Exam Title', 'Submitted At', 'Score', 'Total Marks', 'Status'];
     const rows = items.map(s => [
         s.student_name || '',
         s.student_id || '',
         s.exam_title || s.exam_id || '',
-        s.submitted_at ? new Date(s.submitted_at).toLocaleDateString() : '',
+        s.submitted_at ? new Date(s.submitted_at).toLocaleString() : '',
+        s.score ?? '',
         s.total_marks ?? '',
         s.is_graded ? 'Graded' : 'Pending',
     ]);

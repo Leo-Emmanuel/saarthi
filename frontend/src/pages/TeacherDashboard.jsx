@@ -116,7 +116,7 @@ export default function TeacherDashboard() {
                             <button type="button" className="btn btn-outline" onClick={fetchSubmissions}>
                                 ↻ Refresh
                             </button>
-                            <button type="button" className="btn btn-primary" onClick={() => exportToCSV(filteredSubmissions)}>
+                            <button type="button" className="btn btn-primary" onClick={() => exportToCSV(submissions.map(normalizeSubmission))}>
                                 Export CSV
                             </button>
                         </div>
