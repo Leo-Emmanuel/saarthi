@@ -17,8 +17,10 @@ bind = f"0.0.0.0:{os.getenv('PORT', '5000')}"
 # Single worker for dev/free tier (Render free has limited memory)
 workers = int(os.getenv("GUNICORN_WORKERS", "1"))
 
-# Worker class: sync (simple, reliable for Flask-SocketIO with threading async_mode)
-worker_class = "sync"
+# Worker class: threaded workers allow Socket.IO long-polling GET/POST
+# requests to be handled concurrently by the single Render worker process.
+worker_class = "gthread"
+threads = int(os.getenv("GUNICORN_THREADS", "8"))
 
 # Worker connections: max concurrent connections per worker
 worker_connections = int(os.getenv("GUNICORN_WORKER_CONNECTIONS", "1024"))
@@ -34,8 +36,12 @@ loglevel = "info"
 
 # Pre-fork hook: Ensure worker starts cleanly
 def on_starting(server):
-    print(f"🚀 Gunicorn starting: timeout={timeout}s, graceful_timeout={graceful_timeout}s, workers={workers}")
+    print(
+        "Gunicorn starting: "
+        f"timeout={timeout}s, graceful_timeout={graceful_timeout}s, "
+        f"workers={workers}, worker_class={worker_class}, threads={threads}"
+    )
 
 # Worker exit hook: Log when worker exits
 def worker_exit(server, worker):
-    print(f"⚠️  Worker {worker.pid} exiting")
+    print(f"Worker {worker.pid} exiting")
