@@ -8,8 +8,9 @@ and business logic so they can be tested independently.
 """
 
 import logging
+from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Any, Mapping, cast
+from typing import Any, cast
 from bson import ObjectId
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
@@ -321,7 +322,9 @@ def grade_submission(submission_id):
         if result is None:
             return jsonify({"error": "Grading failed"}), 500
 
-        return jsonify({"message": "Grading saved", **result})
+        response = {"message": "Grading saved"}
+        response.update(result)
+        return jsonify(response)
     except Exception:
         _log.exception("Grading failed for submission %s", submission_id)
         return jsonify({"error": "Grading failed"}), 500

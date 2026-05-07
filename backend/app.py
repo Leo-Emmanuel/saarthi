@@ -4,12 +4,12 @@ import logging
 import time
 import signal
 import atexit
-from datetime import datetime
+from typing import Any
 
 from dotenv import load_dotenv
 load_dotenv()  # Load environment variables first
 
-from flask import Flask, request, jsonify, make_response, g
+from flask import Flask, request, g
 from flask_jwt_extended import JWTManager
 from flask_cors import CORS
 from flask_limiter import Limiter
@@ -46,13 +46,14 @@ app.config["JWT_SECRET_KEY"] = _secret_key
 @app.before_request
 def _request_timeout_guard():
     """Store request start time for timeout detection."""
-    g.start_time = time.time()
+    setattr(g, "start_time", time.time())
 
 @app.after_request
 def _check_request_timeout(response):
     """Log warning if request took >40s (close to timeout)."""
-    if hasattr(g, 'start_time'):
-        elapsed = time.time() - g.start_time
+    start_time = getattr(g, "start_time", None)
+    if start_time is not None:
+        elapsed = time.time() - float(start_time)
         if elapsed > 40:
             _startup_log.warning(f"⚠️  Slow request: {request.method} {request.path} took {elapsed:.1f}s")
     return response
@@ -101,21 +102,25 @@ _debug_mode = os.getenv("FLASK_DEBUG", "false").lower() == "true"
 _is_production = os.getenv("RENDER", "false").lower() == "true"
 
 # On Render, force polling-only mode (WebSocket unreliable on free tier)
-_allowed_transports = ["polling"] if _is_production else ["websocket", "polling"]
+_allowed_transports: list[str] = ["polling"] if _is_production else ["websocket", "polling"]
+
+_socketio_options: dict[str, Any] = {
+    "cors_allowed_origins": _allowed_origins,
+    "cors_credentials": True,
+    "async_mode": "threading",
+    "logger": _debug_mode,
+    "engineio_logger": _debug_mode,
+    "transports": _allowed_transports,
+    "allow_upgrades": False,
+    "ping_timeout": 60,
+    "ping_interval": 25,
+    "max_http_buffer_size": 10000000,
+    "http_compression": False,
+}
 
 socketio = SocketIO(
     app,
-    cors_allowed_origins=_allowed_origins,
-    cors_credentials=True,
-    async_mode="threading",
-    logger=_debug_mode,
-    engineio_logger=_debug_mode,
-    transports=_allowed_transports,           # Force polling on Render
-    allow_upgrades=False,                     # Disable transport upgrades (use polling only)
-    ping_timeout=60,                          # Close idle connections after 60s
-    ping_interval=25,                         # Send ping every 25s
-    max_http_buffer_size=10000000,            # 10MB buffer for large messages
-    http_compression=False,                   # Disable compression (can cause 400s)
+    **_socketio_options,
 )
 
 from routes import socket_events  # noqa: F401
