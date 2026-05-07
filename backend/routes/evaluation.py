@@ -165,7 +165,7 @@ def _fetch_submission_detail(submission_oid):
 def _grade_submission(submission_oid, grades, feedback):
     """Apply grades and feedback to a submission.
 
-    Returns (total_marks, None) on success, or (None, error_msg) on failure.
+    Returns (earned_score, None) on success, or (None, error_msg) on failure.
     """
     sub = _submissions.find_one({"_id": submission_oid})
     if not sub:
@@ -173,7 +173,7 @@ def _grade_submission(submission_oid, grades, feedback):
 
     # Validate grades values are numeric
     try:
-        total_marks = sum(float(v) for v in grades.values())
+        earned_score = sum(float(v) for v in grades.values())
     except (TypeError, ValueError):
         return None, "All grade values must be numeric"
 
@@ -181,12 +181,12 @@ def _grade_submission(submission_oid, grades, feedback):
         {"_id": submission_oid},
         {"$set": {
             "grades": grades,
-            "total_marks": total_marks,
+            "score": earned_score,
             "feedback": feedback,
             "is_graded": True,
         }},
     )
-    return total_marks, None
+    return earned_score, None
 
 
 # ── Route handlers (thin — validation + response only) ───────────────────────

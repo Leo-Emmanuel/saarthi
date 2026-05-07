@@ -185,6 +185,19 @@ def _is_mcq_like(q) -> bool:
 
     if options and len(options) > 0:
         return True
+
+    # Fallback for legacy text questions where options were left empty in the DB,
+    # but the correct_answer is clearly formatted as an MCQ (e.g., "(A) H2O" or "A").
+    correct = ""
+    if isinstance(q, dict):
+        correct = str(q.get("correct_answer", "")).strip().upper()
+    elif hasattr(q, "correct_answer"):
+        correct = str(getattr(q, "correct_answer", "")).strip().upper()
+        
+    import re
+    if re.match(r'^(\(?[A-D]\)?)(:|\s|$)', correct):
+        return True
+
     return q_type == "mcq"
 
 
@@ -370,12 +383,17 @@ def _grade_answers(questions, answers_raw):
 
     score = 0
     total_marks = 0
+    grades_dict = {}
     nlp = _get_nlp()
     _log.info(f"[GRADE] Grading {len(questions)} questions with answers type: {type(answers_raw).__name__}")
 
     for q in questions:
         q_id = str(q.get("_id", ""))
-        marks = q.get("marks", 1)
+        try:
+            marks = float(q.get("marks", 1))
+        except (ValueError, TypeError):
+            marks = 1.0
+            
         q_type = q.get("type", "text")
         total_marks += marks
 
@@ -383,7 +401,10 @@ def _grade_answers(questions, answers_raw):
         student = str(answers.get(q_id, "")).strip()
         _log.debug(f"[GRADE] Q{q_id} type={q_type} score={marks} student='{student[:50]}' correct='{correct[:50]}'")
 
+        q_score = 0
+
         if not correct or not student:
+            grades_dict[q_id] = 0
             continue
 
         # Read per-question grading config (Fix 4)
@@ -392,6 +413,7 @@ def _grade_answers(questions, answers_raw):
 
         # ── Manual grading: skip auto-scoring ─────────────────────────────
         if method == "manual":
+            grades_dict[q_id] = 0
             continue
 
         # ── MCQ: normalised single-letter comparison ──────────────────────
@@ -408,18 +430,22 @@ def _grade_answers(questions, answers_raw):
             _log.debug(f"[GRADE] MCQ: extracted='{extracted}' vs correct='{norm_correct}'")
             if extracted and extracted == norm_correct:
                 _log.info(f"[GRADE] MCQ Q{q_id}: ✓ correct ({marks} pts)")
+                q_score = marks
                 score += marks
             else:
                 _log.info(f"[GRADE] MCQ Q{q_id}: ✗ wrong - got '{extracted}' expected '{norm_correct}'")
+            grades_dict[q_id] = q_score
             continue
 
         # ── Exact match method ────────────────────────────────────────────
         if method == "exact":
             if student.lower() == correct.lower():
                 _log.info(f"[GRADE] Exact Q{q_id}: ✓ match ({marks} pts)")
+                q_score = marks
                 score += marks
             else:
                 _log.info(f"[GRADE] Exact Q{q_id}: ✗ no match")
+            grades_dict[q_id] = q_score
             continue
 
         # ── NLP: similarity scoring with configurable thresholds ──────────
@@ -431,13 +457,17 @@ def _grade_answers(questions, answers_raw):
 
         if sim >= threshold_full:
             _log.info(f"[GRADE] NLP Q{q_id}: ✓ full score ({marks} pts)")
+            q_score = marks
             score += marks
         elif sim >= threshold_partial:
             partial_score = marks * 0.5
             _log.info(f"[GRADE] NLP Q{q_id}: ~ partial score ({partial_score:.1f} pts)")
+            q_score = partial_score
             score += partial_score
+            
+        grades_dict[q_id] = q_score
 
-    return score, total_marks
+    return score, total_marks, grades_dict
 
 
 def _generate_submission_pdf(user_doc, exam_doc, exam_id, answers_raw, score, total_marks):
@@ -538,8 +568,9 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
             # Step 2: Grade answers
             step2_start = time.time()
             score, total_marks = 0, 0
+            grades_dict = {}
             if exam_doc and exam_doc.get("questions"):
-                score, total_marks = _grade_answers(exam_doc["questions"], answers_raw)
+                score, total_marks, grades_dict = _grade_answers(exam_doc["questions"], answers_raw)
             step2_time = time.time() - step2_start
             _log.info(f"[GRADE] Step 2 (grade answers): {step2_time:.2f}s → score={score}/{total_marks}")
 
@@ -556,6 +587,7 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
                         "submitted_at": datetime.now(timezone.utc),
                         "score": score,
                         "total_marks": total_marks,
+                        "grades": grades_dict,
                     }},
                 )
                 return
@@ -589,6 +621,7 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
                     "submitted_at": datetime.now(timezone.utc),
                     "score": score,
                     "total_marks": total_marks,
+                    "grades": grades_dict,
                     **({} if pdf_url is None else {"pdf_url": pdf_url}),
                 }},
             )
