@@ -10,6 +10,7 @@ export default function TeacherDashboard() {
     usePageTitle('Teacher Dashboard');
     const [submissions, setSubmissions] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [exporting, setExporting] = useState(false);
     const [fetchError, setFetchError] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
     const [searchTerm, setSearchTerm] = useState('');
@@ -27,6 +28,42 @@ export default function TeacherDashboard() {
             setLoading(false);
         }
     }, []);
+
+    const fetchAllSubmissions = useCallback(async () => {
+        const perPage = 200;
+        const firstRes = await api.get('/evaluation/submissions', {
+            params: { page: 1, per_page: perPage },
+        });
+        const firstData = firstRes.data || {};
+        const firstItems = firstData.items || firstData || [];
+        const totalPages = Number(firstData.total_pages) || 1;
+        const allItems = Array.isArray(firstItems) ? [...firstItems] : [];
+
+        for (let page = 2; page <= totalPages; page += 1) {
+            const res = await api.get('/evaluation/submissions', {
+                params: { page, per_page: perPage },
+            });
+            const pageItems = res.data?.items || [];
+            allItems.push(...pageItems);
+        }
+
+        return allItems;
+    }, []);
+
+    const handleExportCSV = useCallback(async () => {
+        setExporting(true);
+        setFetchError('');
+        try {
+            const latestSubmissions = await fetchAllSubmissions();
+            setSubmissions(latestSubmissions);
+            exportToCSV(latestSubmissions.map(normalizeSubmission));
+        } catch (error) {
+            console.error(error);
+            setFetchError('Failed to export latest submissions. Please refresh and try again.');
+        } finally {
+            setExporting(false);
+        }
+    }, [fetchAllSubmissions]);
 
     useEffect(() => {
         fetchSubmissions();
@@ -116,8 +153,8 @@ export default function TeacherDashboard() {
                             <button type="button" className="btn btn-outline" onClick={fetchSubmissions}>
                                 ↻ Refresh
                             </button>
-                            <button type="button" className="btn btn-primary" onClick={() => exportToCSV(submissions.map(normalizeSubmission))}>
-                                Export CSV
+                            <button type="button" className="btn btn-primary" onClick={handleExportCSV} disabled={exporting}>
+                                {exporting ? 'Exporting...' : 'Export CSV'}
                             </button>
                         </div>
                     </div>
