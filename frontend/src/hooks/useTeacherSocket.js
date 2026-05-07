@@ -18,14 +18,31 @@ export function useTeacherSocket(onNewSubmission, onSubmissionGraded) {
         socketRef.current = io(socketUrl, {
             transports: ['polling'],  // Use polling only (WebSocket has issues on Render free tier)
             withCredentials: true,
+            forceNew: true,           // Always create a fresh session — avoids stale sid 400 errors after redeploy
             reconnection: true,
-            reconnectionDelay: 1000,
-            reconnectionDelayMax: 5000,
-            reconnectionAttempts: 5,
+            reconnectionDelay: 2000,
+            reconnectionDelayMax: 10000,
+            reconnectionAttempts: 10,
         });
-        socketRef.current.emit('join_teacher');
-        socketRef.current.on('connect', () => setConnected(true));
+
+        // Emit join AFTER the handshake is complete (not before)
+        socketRef.current.on('connect', () => {
+            setConnected(true);
+            socketRef.current.emit('join_teacher');
+        });
+
         socketRef.current.on('disconnect', () => setConnected(false));
+
+        // Handle 400 bad-session errors: disconnect and let reconnection logic retry
+        socketRef.current.on('connect_error', (err) => {
+            console.warn('[SOCKET] connect_error:', err.message);
+            // If server restarted, force a clean reconnect by disconnecting first
+            if (err.message && (err.message.includes('400') || err.message.includes('session'))) {
+                socketRef.current?.disconnect();
+                setTimeout(() => socketRef.current?.connect(), 3000);
+            }
+        });
+
         socketRef.current.on('new_submission', (submission) => {
             if (onNewSubmissionRef.current) onNewSubmissionRef.current(submission);
         });
