@@ -775,9 +775,13 @@ def create_exam():
             questions_list = _parse_questions_from_file(file_url)
             _log.info(f"Questions from file: {len(questions_list)}")
 
-        # Auto-detect exam type based on questions
-        exam_type = _detect_exam_type(questions_list)
-        _log.info(f"Detected exam type: {exam_type}")
+        # Use explicit exam type when provided; otherwise auto-detect.
+        requested_type = data.get("examType")
+        exam_type = requested_type or _detect_exam_type(questions_list)
+        if requested_type:
+            _log.info(f"Using requested exam type: {requested_type}")
+        else:
+            _log.info(f"Detected exam type: {exam_type}")
         
         exam = Exam(
             title=data.get("title", "Untitled Exam"),

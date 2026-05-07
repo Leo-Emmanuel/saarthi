@@ -56,6 +56,11 @@ class ExamCreateSchema(Schema):
     questions = fields.List(fields.Nested(QuestionSchema), load_default=[])
     file_url = fields.String(load_default=None, allow_none=True)
     file_path = fields.String(load_default=None, allow_none=True)
+    examType = fields.String(
+        load_default=None,
+        allow_none=True,
+        validate=validate.OneOf(["mcq-only", "writing-only", "mixed"]),
+    )
 
 
 class AnswerItemSchema(Schema):

@@ -37,13 +37,14 @@ export async function uploadQuestionPaper(file) {
 }
 
 /** Create a new exam. */
-export async function createExam({ title, description, duration, file_path, questions }) {
+export async function createExam({ title, description, duration, file_path, questions, examType }) {
     const res = await api.post('/exam/create', {
         title,
         description,
         duration: parseInt(duration, 10),
         file_url: file_path, // backend expects snake_case 'file_url'
         questions: Array.isArray(questions) ? questions : [],
+        examType: examType || null,
     });
     return res.data;
 }

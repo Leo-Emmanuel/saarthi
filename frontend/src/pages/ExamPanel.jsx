@@ -17,6 +17,7 @@ export default function ExamPanel() {
     const [description, setDescription] = useState('');
     const [file, setFile] = useState(null);
     const fileInputRef = useRef(null);
+    const [examTypeChoice, setExamTypeChoice] = useState('');
     const [uploading, setUploading] = useState(false);
     const [message, setMessage] = useState('');
     const [isError, setIsError] = useState(false);
@@ -80,6 +81,7 @@ export default function ExamPanel() {
         setTitle('');
         setDescription('');
         setFile(null);
+        setExamTypeChoice('');
         setFieldErrors({});
         setQuestions([]);
         setQuestionErrors({});
@@ -106,6 +108,10 @@ export default function ExamPanel() {
             if (!cleanTitle || cleanTitle.length < 3) {
                 nextErrors.title = 'Exam title must be at least 3 characters';
             }
+            if (file && !examTypeChoice) {
+                nextErrors.examType = 'Please choose MCQ or Written for the uploaded paper';
+            }
+
             const nextQuestionErrors = {};
             questions.forEach((q) => {
                 const errors = {};
@@ -158,6 +164,7 @@ export default function ExamPanel() {
                 duration,
                 file_path: filePath,
                 questions: payloadQuestions,
+                examType: filePath ? examTypeChoice : null,
             });
 
             setMessage('Exam created successfully!');
@@ -279,7 +286,9 @@ export default function ExamPanel() {
                             type="file"
                             className="input-dark w-full"
                             onChange={(e) => {
-                                setFile(e.target.files[0]);
+                                const nextFile = e.target.files[0];
+                                setFile(nextFile);
+                                if (!nextFile) setExamTypeChoice('');
                                 if (fieldErrors.file) {
                                     setFieldErrors(prev => ({ ...prev, file: '' }));
                                 }
@@ -289,6 +298,32 @@ export default function ExamPanel() {
                             <p style={{ color: 'red', fontSize: '0.85rem', marginTop: 4 }}>
                                 {fieldErrors.file}
                             </p>
+                        )}
+                        {file && (
+                            <div className="mt-3">
+                                <label className="block mb-1" style={{ color: 'var(--muted)', fontSize: 14 }}>
+                                    Question Paper Type
+                                </label>
+                                <select
+                                    className="input-dark w-full"
+                                    value={examTypeChoice}
+                                    onChange={(e) => {
+                                        setExamTypeChoice(e.target.value);
+                                        if (fieldErrors.examType) {
+                                            setFieldErrors(prev => ({ ...prev, examType: '' }));
+                                        }
+                                    }}
+                                >
+                                    <option value="">Select type</option>
+                                    <option value="mcq-only">MCQ</option>
+                                    <option value="writing-only">Written Maths</option>
+                                </select>
+                                {fieldErrors.examType && (
+                                    <p style={{ color: 'red', fontSize: '0.85rem', marginTop: 4 }}>
+                                        {fieldErrors.examType}
+                                    </p>
+                                )}
+                            </div>
                         )}
                     </div>
                     <div
