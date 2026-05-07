@@ -517,7 +517,7 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
         with app.app_context():
             _submissions.update_one(
                 {"exam_id": exam_oid, "user_id": user_oid},
-                {"$set": {"status": "graded", "score": 0, "total_marks": 0}},
+                {"$set": {"status": "graded", "is_graded": True, "score": 0, "total_marks": 0}},
             )
             # Notify teachers of queue-full scenario
             try:
@@ -561,7 +561,7 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
                 _finish_grading()
                 _submissions.update_one(
                     {"exam_id": exam_oid, "user_id": user_oid},
-                    {"$set": {"status": "graded", "score": 0, "total_marks": 0}},
+                    {"$set": {"status": "graded", "is_graded": True, "score": 0, "total_marks": 0}},
                 )
                 return
 
@@ -584,6 +584,7 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
                     {"exam_id": exam_oid, "user_id": user_oid},
                     {"$set": {
                         "status": "graded",
+                        "is_graded": True,
                         "submitted_at": datetime.now(timezone.utc),
                         "score": score,
                         "total_marks": total_marks,
@@ -618,6 +619,7 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
                 {"exam_id": exam_oid, "user_id": user_oid},
                 {"$set": {
                     "status": "graded",
+                    "is_graded": True,
                     "submitted_at": datetime.now(timezone.utc),
                     "score": score,
                     "total_marks": total_marks,
@@ -671,6 +673,7 @@ def _grade_in_background(app, exam_oid, user_oid, answers_raw):
                     {"exam_id": exam_oid, "user_id": user_oid},
                     {"$set": {
                         "status": "graded",
+                        "is_graded": True,
                         "score": 0,
                         "total_marks": 0,
                         "grading_error": str(exc),
@@ -883,11 +886,15 @@ def _enrich_question_for_client(q: dict) -> dict:
                 if letter in option_map:
                     parsed_options.append(option_map[letter])
 
-    # Determine if this is an MCQ question
+    correct = str(q.get("correct_answer", "")).strip()
+    correct_is_mcq_letter = bool(_re.match(r'^\(?[A-D]\)?[).]?(?:\s|$)', correct, _re.IGNORECASE))
+
+    # Determine if this is an MCQ question. A written question can also have a
+    # correct_answer for grading, so the answer key alone is not enough.
     is_mcq = (
-        has_correct
-        or len(existing_options) > 0
+        len(existing_options) > 0
         or len(parsed_options) > 0
+        or (has_correct and correct_is_mcq_letter)
     )
 
     if is_mcq:
@@ -985,6 +992,10 @@ def submit_exam(exam_id):
             "flagged": violation_count >= 3,  # Auto-flag if 3+ violations
             "last_updated": datetime.now(timezone.utc),
             "status": "submitted" if is_final else "in_progress",
+            "is_graded": False,
+            "score": 0,
+            "total_marks": 0,
+            "grades": {},
         }
 
         if existing:

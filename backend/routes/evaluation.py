@@ -8,6 +8,7 @@ and business logic so they can be tested independently.
 """
 
 import logging
+from datetime import datetime, timezone
 from bson import ObjectId
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
@@ -73,7 +74,7 @@ def _fetch_submissions(exam_id=None, page=1, per_page=_DEFAULT_PAGE_SIZE):
 
     Uses batch $in lookups to avoid the N+1 pattern.
     """
-    query = {"status": {"$in": ["in_progress", "submitted", "grading", "graded"]}}
+    query = {"status": {"$in": ["submitted", "grading", "graded", "graded_error"]}}
     if exam_id:
         oid = _safe_object_id(exam_id)
         if oid:
@@ -135,7 +136,8 @@ def _fetch_submissions(exam_id=None, page=1, per_page=_DEFAULT_PAGE_SIZE):
             "student_email": student_email,
             "studentEmail": student_email,
             "submitted_at": submitted_at,
-            "is_graded": sub.get("is_graded", False),
+            "status": sub.get("status", "submitted"),
+            "is_graded": bool(sub.get("is_graded", False)) or sub.get("status") in ("graded", "graded_error"),
             "score": sub.get("score", 0),
             "total_marks": sub.get("total_marks", 0),
             "flagged": sub.get("flagged", False),
@@ -177,16 +179,31 @@ def _grade_submission(submission_oid, grades, feedback):
     except (TypeError, ValueError):
         return None, "All grade values must be numeric"
 
+    total_marks = sub.get("total_marks") or 0
+    if not total_marks:
+        exam = _exams.find_one({"_id": sub.get("exam_id")}, {"questions.marks": 1})
+        if exam:
+            total_marks = sum(
+                float(q.get("marks", 1) or 0)
+                for q in exam.get("questions", [])
+            )
+    if not total_marks:
+        total_marks = earned_score
+
     _submissions.update_one(
         {"_id": submission_oid},
         {"$set": {
             "grades": grades,
             "score": earned_score,
+            "total_marks": total_marks,
             "feedback": feedback,
             "is_graded": True,
+            "status": "graded",
+            "last_updated": datetime.now(timezone.utc),
+            "grading_completed_at": datetime.now(timezone.utc),
         }},
     )
-    return earned_score, None
+    return {"score": earned_score, "total_marks": total_marks}, None
 
 
 # ── Route handlers (thin — validation + response only) ───────────────────────
@@ -292,11 +309,11 @@ def grade_submission(submission_id):
     feedback = data.get("feedback", "")
 
     try:
-        total_marks, error_msg = _grade_submission(oid, grades, feedback)
+        result, error_msg = _grade_submission(oid, grades, feedback)
         if error_msg:
             return jsonify({"error": error_msg}), 400
 
-        return jsonify({"message": "Grading saved", "total_marks": total_marks})
+        return jsonify({"message": "Grading saved", **result})
     except Exception:
         _log.exception("Grading failed for submission %s", submission_id)
         return jsonify({"error": "Grading failed"}), 500
