@@ -30,7 +30,7 @@ export function exportToCSV(items) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `saarthi-grades-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `saarthi-grades-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
     a.click();
     URL.revokeObjectURL(url);
 }

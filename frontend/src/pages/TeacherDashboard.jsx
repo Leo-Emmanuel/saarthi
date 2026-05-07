@@ -50,20 +50,45 @@ export default function TeacherDashboard() {
         return allItems;
     }, []);
 
+    const mergeSubmissionsForExport = useCallback((latestSubmissions) => {
+        const mergedByKey = new Map();
+        [...submissions, ...latestSubmissions].forEach((submission) => {
+            const normalized = normalizeSubmission(submission);
+            const key = normalized._id || [
+                normalized.student_id,
+                normalized.exam_title,
+                normalized.submitted_at,
+            ].join('|');
+            if (!key) return;
+            mergedByKey.set(key, {
+                ...(mergedByKey.get(key) || {}),
+                ...normalized,
+            });
+        });
+        return Array.from(mergedByKey.values());
+    }, [submissions]);
+
     const handleExportCSV = useCallback(async () => {
         setExporting(true);
         setFetchError('');
         try {
             const latestSubmissions = await fetchAllSubmissions();
-            setSubmissions(latestSubmissions);
-            exportToCSV(latestSubmissions.map(normalizeSubmission));
+            const exportRows = mergeSubmissionsForExport(latestSubmissions);
+            setSubmissions(exportRows);
+            exportToCSV(exportRows);
         } catch (error) {
             console.error(error);
-            setFetchError('Failed to export latest submissions. Please refresh and try again.');
+            const fallbackRows = submissions.map(normalizeSubmission);
+            if (fallbackRows.length) {
+                exportToCSV(fallbackRows);
+                setFetchError('Exported the currently visible submissions because the latest refresh failed.');
+            } else {
+                setFetchError('Failed to export latest submissions. Please refresh and try again.');
+            }
         } finally {
             setExporting(false);
         }
-    }, [fetchAllSubmissions]);
+    }, [fetchAllSubmissions, mergeSubmissionsForExport, submissions]);
 
     useEffect(() => {
         fetchSubmissions();
