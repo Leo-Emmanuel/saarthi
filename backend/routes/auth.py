@@ -45,6 +45,8 @@ _log = logging.getLogger(__name__)
 
 def _safe_object_id(raw):
     """Convert a string to ObjectId, returning None on malformed input."""
+    if isinstance(raw, ObjectId):
+        return raw
     try:
         return ObjectId(raw)
     except Exception:

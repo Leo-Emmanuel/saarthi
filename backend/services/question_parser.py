@@ -40,7 +40,7 @@ def _try_correct_answer(line):
 def _flush_question(text, correct_answer=None, options=None):
     """Create a Question dict, optionally with a correct answer and options."""
     q_type = "mcq" if options else "text"
-    q = Question(text=text, type=q_type).to_dict()
+    q = Question(text=text, q_type=q_type).to_dict()
     if correct_answer:
         q["correct_answer"] = correct_answer
     if options:

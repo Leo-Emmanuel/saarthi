@@ -110,6 +110,8 @@ def _safe_emit_socket_event(socketio, event_name, data, room=None, timeout_sec=5
 
 def _safe_object_id(raw):
     """Convert a string to ObjectId, returning None on malformed input."""
+    if isinstance(raw, ObjectId):
+        return raw
     try:
         return ObjectId(raw)
     except Exception:

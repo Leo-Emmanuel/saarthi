@@ -9,6 +9,7 @@ and business logic so they can be tested independently.
 
 import logging
 from datetime import datetime, timezone
+from typing import Any, Mapping, cast
 from bson import ObjectId
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
@@ -32,6 +33,8 @@ _DEFAULT_PAGE_SIZE = 50
 
 def _safe_object_id(raw):
     """Convert a string to ObjectId, returning None on malformed input."""
+    if isinstance(raw, ObjectId):
+        return raw
     try:
         return ObjectId(raw)
     except Exception:
@@ -172,6 +175,7 @@ def _grade_submission(submission_oid, grades, feedback):
     sub = _submissions.find_one({"_id": submission_oid})
     if not sub:
         return None, "Submission not found"
+    sub = cast(Mapping[str, Any], sub)
 
     # Validate grades values are numeric
     try:
@@ -183,9 +187,11 @@ def _grade_submission(submission_oid, grades, feedback):
     if not total_marks:
         exam = _exams.find_one({"_id": sub.get("exam_id")}, {"questions.marks": 1})
         if exam:
+            exam = cast(Mapping[str, Any], exam)
             total_marks = sum(
                 float(q.get("marks", 1) or 0)
                 for q in exam.get("questions", [])
+                if isinstance(q, Mapping)
             )
     if not total_marks:
         total_marks = earned_score
@@ -312,6 +318,8 @@ def grade_submission(submission_id):
         result, error_msg = _grade_submission(oid, grades, feedback)
         if error_msg:
             return jsonify({"error": error_msg}), 400
+        if result is None:
+            return jsonify({"error": "Grading failed"}), 500
 
         return jsonify({"message": "Grading saved", **result})
     except Exception:

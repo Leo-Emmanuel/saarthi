@@ -10,7 +10,7 @@ class Question:
     """
 
     def __init__(self, text, q_type, options=None, correct_answer=None, marks=1, id=None, grading_config=None):
-        self.id = ObjectId(id) if id else ObjectId()
+        self.id = id if isinstance(id, ObjectId) else ObjectId(id) if id else ObjectId()
         self.text = text
         self.type = q_type  # 'text', 'mcq'
         self.options = options or []
@@ -58,7 +58,7 @@ class Exam:
     def __init__(self, title, description, created_by, duration, questions=None, file_url=None, examType=None):
         self.title = title
         self.description = description
-        self.created_by = ObjectId(created_by)  # Admin ID
+        self.created_by = created_by if isinstance(created_by, ObjectId) else ObjectId(created_by)  # Admin ID
         self.duration = duration  # In minutes
         # ✅ Keep questions as Question objects — convert dicts on the way in
         self.questions = [

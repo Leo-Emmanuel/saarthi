@@ -3,8 +3,8 @@ from datetime import datetime, timezone
 
 class Submission:
     def __init__(self, exam_id, user_id, answers, audio_files=None):
-        self.exam_id = ObjectId(exam_id)
-        self.user_id = ObjectId(user_id)
+        self.exam_id = exam_id if isinstance(exam_id, ObjectId) else ObjectId(exam_id)
+        self.user_id = user_id if isinstance(user_id, ObjectId) else ObjectId(user_id)
         self.answers = answers # Dictionary {question_id: answer_text}
         self.audio_files = audio_files or {} # Dictionary {question_id: audio_url}
         self.submitted_at = datetime.now(timezone.utc)

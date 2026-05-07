@@ -13,6 +13,7 @@ import logging
 import random
 import string
 from datetime import datetime, timezone
+from collections.abc import Mapping
 from bson import ObjectId
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
@@ -36,6 +37,8 @@ _DEFAULT_PAGE_SIZE = 50
 
 def _safe_object_id(raw):
     """Convert a string to ObjectId, returning None on malformed input."""
+    if isinstance(raw, ObjectId):
+        return raw
     try:
         return ObjectId(raw)
     except Exception:
@@ -474,10 +477,15 @@ _DEFAULT_SYSTEM_SETTINGS = {
 def _merge_system_settings(admin_doc):
     """Return system settings from the admin document, merged with defaults."""
     stored = admin_doc.get("system_settings") or {}
+    if not isinstance(stored, Mapping):
+        stored = {}
     merged = {**_DEFAULT_SYSTEM_SETTINGS, **stored}
+    saved_tts = merged.get("default_tts") or {}
+    if not isinstance(saved_tts, Mapping):
+        saved_tts = {}
     merged["default_tts"] = {
         **_DEFAULT_SYSTEM_SETTINGS["default_tts"],
-        **(merged.get("default_tts") or {}),
+        **saved_tts,
     }
     return merged
 
